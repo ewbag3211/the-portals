@@ -1,0 +1,654 @@
+-- Simple Clicker + Teleport
+-- Tab CLICKER : [jumlah] klik setiap [delay] detik, berulang sampai di-STOP.
+-- Tab TELEPORT: simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
+-- Contoh: jumlah 5, delay 3 = klik 5x, tunggu 3 detik, klik 5x lagi, dst.
+-- Tombol UI atau 0 = start/stop | P = ambil posisi mouse | X atau End = matikan script
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+
+local HOLD_TIME = 0.05   -- lama klik ditahan (50 ms)
+local CLICK_GAP = 0.1    -- jeda antar klik dalam satu putaran (100 ms)
+local MIN_DELAY = 0.1    -- delay paling kecil yang diizinkan
+local MAX_CLICKS = 1000  -- batas jumlah klik per putaran
+
+local player = Players.LocalPlayer
+local TP_HEIGHT = 3                            -- teleport sedikit di atas titik supaya tidak nyangkut
+local SAVE_FILE = "macro_teleport_points.json" -- sama dengan script macro, jadi lokasi tersimpan dipakai bersama
+
+-- Lokasi bawaan: selalu ada di daftar (ditambahkan otomatis kalau belum ada)
+local DEFAULT_POINTS = {
+    { name = "Farm to Village",   x = 278,  y = 10,  z = -28 },
+    { name = "Village to Goblin", x = 175,  y = -3,  z = 164 },
+    { name = "Goblin to Pohon",   x = 547,  y = 107, z = -911 },
+    { name = "Pohon to Village",  x = -761, y = 45,  z = -222 },
+}
+
+-- Matikan versi lama jika script dijalankan ulang
+if _G.StopSimpleClicker then
+    _G.StopSimpleClicker()
+end
+
+local isActive = false
+local isAlive = true
+local targetX, targetY, clickAmount, clickDelay = nil, nil, nil, nil
+local connections = {}
+
+-- ==========================================================
+-- MEMBUAT UI
+-- ==========================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "SimpleClickerUI"
+gui.ResetOnSpawn = false
+gui.Parent = CoreGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 200, 0, 330)
+frame.Position = UDim2.new(0, 30, 0, 100)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+Instance.new("UIDragDetector", frame)
+
+local HEADER = 32 -- tinggi baris tab di atas
+
+local function createTab(xScale, text)
+    local tab = Instance.new("TextButton")
+    tab.Size = UDim2.new(0.5, -20, 0, 24)
+    tab.Position = UDim2.new(xScale, xScale == 0 and 8 or 0, 0, 5)
+    tab.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    tab.BorderSizePixel = 0
+    tab.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tab.Font = Enum.Font.SourceSansBold
+    tab.TextSize = 13
+    tab.Text = text
+    tab.Parent = frame
+    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 5)
+    return tab
+end
+
+local clickerTab = createTab(0, "CLICKER")
+local teleportTab = createTab(0.5, "TELEPORT")
+
+local function createPage()
+    local page = Instance.new("Frame")
+    page.Size = UDim2.new(1, 0, 1, -HEADER)
+    page.Position = UDim2.new(0, 0, 0, HEADER)
+    page.BackgroundTransparency = 1
+    page.Parent = frame
+    return page
+end
+
+local clickerPage = createPage()
+local teleportPage = createPage()
+
+-- Elemen dibuat di halaman ini (diganti ke teleportPage saat membuat tab teleport)
+local currentParent = clickerPage
+
+local function createLabel(yPos, height, text)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 160, 0, height)
+    label.Position = UDim2.new(0, 20, 0, yPos)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.Font = Enum.Font.SourceSansBold
+    label.TextSize = 14
+    label.Text = text
+    label.TextWrapped = true
+    label.Parent = currentParent
+    return label
+end
+
+local function createTextBox(yPos, placeholder, defaultText)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0, 160, 0, 26)
+    box.Position = UDim2.new(0, 20, 0, yPos)
+    box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    box.BorderSizePixel = 0
+    box.PlaceholderText = placeholder
+    box.Text = defaultText
+    box.ClearTextOnFocus = false
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSans
+    box.TextSize = 14
+    box.Parent = currentParent
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+    return box
+end
+
+local function createButton(yPos, height, text, color)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0, 160, 0, height)
+    button.Position = UDim2.new(0, 20, 0, yPos)
+    button.BackgroundColor3 = color
+    button.BorderSizePixel = 0
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.SourceSansBold
+    button.TextSize = 13
+    button.Text = text
+    button.Parent = currentParent
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+    return button
+end
+
+local positionLabel = createLabel(5, 25, "Mouse X: 0 | Y: 0")
+local inputX = createTextBox(32, "Target X", "400")
+local inputY = createTextBox(65, "Target Y", "300")
+local inputAmount = createTextBox(98, "Jumlah klik per putaran", "1")
+local inputDelay = createTextBox(131, "Setiap ... detik", "15")
+
+local modeButton = createButton(164, 26, "", Color3.fromRGB(80, 80, 80))
+local pickButton = createButton(197, 26, "AMBIL POSISI TOUCH", Color3.fromRGB(60, 80, 130))
+local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
+toggleButton.TextSize = 14
+
+local infoLabel = createLabel(264, 30, "Putaran: 0")
+infoLabel.Font = Enum.Font.SourceSans
+infoLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local exitButton = Instance.new("TextButton")
+exitButton.Size = UDim2.new(0, 20, 0, 20)
+exitButton.Position = UDim2.new(1, -25, 0, 7)
+exitButton.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+exitButton.BorderSizePixel = 0
+exitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+exitButton.Font = Enum.Font.SourceSansBold
+exitButton.TextSize = 12
+exitButton.Text = "X"
+exitButton.Parent = frame
+Instance.new("UICorner", exitButton).CornerRadius = UDim.new(0, 4)
+
+-- ==========================================================
+-- TAB TELEPORT: UI
+-- ==========================================================
+currentParent = teleportPage
+
+local currentPosLabel = createLabel(0, 22, "Posisi: -")
+currentPosLabel.Font = Enum.Font.Code
+currentPosLabel.TextSize = 12
+currentPosLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local inputName = createTextBox(24, "Nama lokasi (opsional)", "")
+local saveButton = createButton(54, 26, "SIMPAN POSISI SEKARANG", Color3.fromRGB(20, 120, 60))
+
+local inputCoords = createTextBox(86, "X, Y, Z  (tempel dari scanner)", "")
+local tpCoordsButton = createButton(116, 26, "TP KE KOORDINAT", Color3.fromRGB(60, 80, 130))
+
+local tpStatus = createLabel(144, 18, "")
+tpStatus.Font = Enum.Font.SourceSans
+tpStatus.TextSize = 12
+tpStatus.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local listFrame = Instance.new("ScrollingFrame")
+listFrame.Size = UDim2.new(0, 170, 0, 160)
+listFrame.Position = UDim2.new(0, 15, 0, 164)
+listFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+listFrame.BorderSizePixel = 0
+listFrame.ScrollBarThickness = 5
+listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+listFrame.Parent = teleportPage
+Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 6)
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 3)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = listFrame
+
+local listPadding = Instance.new("UIPadding")
+listPadding.PaddingTop = UDim.new(0, 3)
+listPadding.PaddingLeft = UDim.new(0, 3)
+listPadding.PaddingRight = UDim.new(0, 8)
+listPadding.Parent = listFrame
+
+local function showTab(name)
+    clickerPage.Visible = name == "clicker"
+    teleportPage.Visible = name == "teleport"
+    clickerTab.BackgroundColor3 = name == "clicker" and Color3.fromRGB(90, 90, 90) or Color3.fromRGB(55, 55, 55)
+    teleportTab.BackgroundColor3 = name == "teleport" and Color3.fromRGB(90, 90, 90) or Color3.fromRGB(55, 55, 55)
+    frame.Size = UDim2.new(0, 200, 0, name == "teleport" and (HEADER + 332) or (HEADER + 298))
+end
+
+showTab("clicker")
+
+-- ==========================================================
+-- MODE PC / MOBILE
+-- ==========================================================
+local isMobileMode = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local function applyMode()
+    if isMobileMode then
+        modeButton.Text = "MODE: MOBILE"
+        pickButton.Text = "AMBIL POSISI TOUCH"
+        positionLabel.Text = "Touch X: - | Y: -"
+    else
+        modeButton.Text = "MODE: PC"
+        pickButton.Text = "AMBIL POSISI (P)"
+        positionLabel.Text = "Mouse X: 0 | Y: 0"
+    end
+end
+
+applyMode()
+
+-- ==========================================================
+-- STATUS DAN INPUT
+-- ==========================================================
+local function setStatus(text, color)
+    toggleButton.Text = text
+    toggleButton.BackgroundColor3 = color
+end
+
+local function stopClicker()
+    isActive = false
+    setStatus("START", Color3.fromRGB(20, 120, 60))
+end
+
+-- Membaca dan memeriksa isi kolom
+local function loadSettings()
+    local x = tonumber(inputX.Text)
+    local y = tonumber(inputY.Text)
+    local amount = tonumber(inputAmount.Text)
+    local delay = tonumber(inputDelay.Text)
+
+    if not x or not y or not amount or amount < 1 or not delay then
+        return false
+    end
+
+    targetX = x
+    targetY = y
+    clickAmount = math.clamp(math.floor(amount), 1, MAX_CLICKS)
+    clickDelay = math.max(delay, MIN_DELAY)
+
+    inputAmount.Text = tostring(clickAmount)
+    inputDelay.Text = tostring(clickDelay)
+    return true
+end
+
+local function startClicker()
+    if loadSettings() then
+        isActive = true
+        setStatus("STOP", Color3.fromRGB(120, 30, 30))
+    else
+        setStatus("INPUT TIDAK VALID", Color3.fromRGB(170, 110, 20))
+    end
+end
+
+local function toggleClicker()
+    if isActive then
+        stopClicker()
+    else
+        startClicker()
+    end
+end
+
+-- Berhenti saat kolom diklik agar input tidak bentrok
+for _, box in ipairs({ inputX, inputY, inputAmount, inputDelay }) do
+    table.insert(connections, box.Focused:Connect(stopClicker))
+end
+
+-- ==========================================================
+-- FUNGSI KLIK
+-- ==========================================================
+local function waitFor(seconds)
+    local elapsed = 0
+    while elapsed < seconds do
+        if not isActive or not isAlive then
+            return false
+        end
+        elapsed += task.wait()
+    end
+    return isActive and isAlive
+end
+
+local function tapOnce()
+    local success = pcall(function()
+        VirtualInputManager:SendTouchEvent(0, 0, targetX, targetY)
+        task.wait(HOLD_TIME)
+        VirtualInputManager:SendTouchEvent(0, 2, targetX, targetY)
+    end)
+
+    if not success then
+        stopClicker()
+        setStatus("TOUCH TIDAK DIDUKUNG", Color3.fromRGB(170, 110, 20))
+    end
+end
+
+local function clickOnce()
+    if isMobileMode then
+        tapOnce()
+        return
+    end
+
+    VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, true, game, 0)
+    task.wait(HOLD_TIME)
+    VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, false, game, 0)
+end
+
+-- Loop: klik [jumlah] kali, tunggu [delay] detik, ulang terus sampai STOP
+local function runClicks()
+    local round = 0
+    while isActive and isAlive do
+        round += 1
+
+        -- Klik sebanyak jumlah
+        for i = 1, clickAmount do
+            if not isActive or not isAlive then
+                return
+            end
+            clickOnce()
+            infoLabel.Text = string.format("Putaran %d | Klik %d/%d", round, i, clickAmount)
+            if i < clickAmount and not waitFor(CLICK_GAP) then
+                return
+            end
+        end
+
+        -- Tunggu sampai putaran berikutnya, sambil menampilkan hitung mundur
+        local remaining = clickDelay
+        while remaining > 0 do
+            infoLabel.Text = string.format("Putaran %d | Lanjut %.1f dtk", round, remaining)
+            local step = math.min(0.1, remaining)
+            if not waitFor(step) then
+                return
+            end
+            remaining -= step
+        end
+    end
+end
+
+-- ==========================================================
+-- TAB TELEPORT: FUNGSI
+-- ==========================================================
+local savedPoints = {} -- daftar { name, x, y, z }
+
+local function getRoot()
+    local character = player.Character
+    return character, character and character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Teleport ke posisi, tetap menghadap arah yang sama
+local function teleportTo(position)
+    local character, rootPart = getRoot()
+    if not rootPart then
+        tpStatus.Text = "Karakter tidak ditemukan"
+        return false
+    end
+    local target = position + Vector3.new(0, TP_HEIGHT, 0)
+    local look = rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+    if look.Magnitude < 0.01 then
+        look = Vector3.new(0, 0, -1)
+    end
+    character:PivotTo(CFrame.lookAt(target, target + look.Unit))
+    rootPart.AssemblyLinearVelocity = Vector3.zero
+    return true
+end
+
+-- Simpan ke file (kalau executor punya writefile), supaya tetap ada setelah rejoin
+local function saveToFile()
+    if not writefile then
+        return
+    end
+    pcall(function()
+        writefile(SAVE_FILE, HttpService:JSONEncode(savedPoints))
+    end)
+end
+
+local function loadFromFile()
+    if not (readfile and isfile) then
+        return
+    end
+    pcall(function()
+        if isfile(SAVE_FILE) then
+            local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+            if type(data) == "table" then
+                savedPoints = data
+            end
+        end
+    end)
+end
+
+-- Membaca "x, y, z" dari teks, contoh "-525.92, 47.28, -181.06"
+local function parseCoords(text)
+    local numbers = {}
+    for value in string.gmatch(text, "-?%d+%.?%d*") do
+        table.insert(numbers, tonumber(value))
+    end
+    if #numbers >= 3 then
+        return Vector3.new(numbers[1], numbers[2], numbers[3])
+    end
+    return nil
+end
+
+local refreshList -- didefinisikan di bawah
+
+local function createPointRow(index, point)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    row.BorderSizePixel = 0
+    row.LayoutOrder = index
+    row.Parent = listFrame
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, -78, 1, 0)
+    nameLabel.Position = UDim2.new(0, 6, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextSize = 12
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    nameLabel.Text = point.name
+    nameLabel.Parent = row
+
+    local function smallButton(xOffset, text, color)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0, 34, 0, 22)
+        button.Position = UDim2.new(1, xOffset, 0, 4)
+        button.BackgroundColor3 = color
+        button.BorderSizePixel = 0
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.Font = Enum.Font.SourceSansBold
+        button.TextSize = 11
+        button.Text = text
+        button.Parent = row
+        Instance.new("UICorner", button).CornerRadius = UDim.new(0, 4)
+        return button
+    end
+
+    local tpButton = smallButton(-72, "TP", Color3.fromRGB(60, 80, 130))
+    local deleteButton = smallButton(-36, "HPS", Color3.fromRGB(150, 40, 40))
+
+    tpButton.Activated:Connect(function()
+        if teleportTo(Vector3.new(point.x, point.y, point.z)) then
+            tpStatus.Text = "Teleport ke " .. point.name
+        end
+    end)
+
+    deleteButton.Activated:Connect(function()
+        table.remove(savedPoints, index)
+        saveToFile()
+        refreshList()
+        tpStatus.Text = point.name .. " dihapus"
+    end)
+end
+
+refreshList = function()
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+    for index, point in ipairs(savedPoints) do
+        createPointRow(index, point)
+    end
+end
+
+loadFromFile()
+
+-- Tambahkan lokasi bawaan yang belum ada di daftar (dicek dari namanya)
+for _, default in ipairs(DEFAULT_POINTS) do
+    local exists = false
+    for _, point in ipairs(savedPoints) do
+        if point.name == default.name then
+            exists = true
+            break
+        end
+    end
+    if not exists then
+        table.insert(savedPoints, { name = default.name, x = default.x, y = default.y, z = default.z })
+    end
+end
+
+refreshList()
+
+table.insert(connections, saveButton.Activated:Connect(function()
+    local _, rootPart = getRoot()
+    if not rootPart then
+        tpStatus.Text = "Karakter tidak ditemukan"
+        return
+    end
+    local position = rootPart.Position - Vector3.new(0, TP_HEIGHT, 0)
+    local name = inputName.Text ~= "" and inputName.Text or ("Lokasi " .. (#savedPoints + 1))
+    table.insert(savedPoints, { name = name, x = position.X, y = position.Y, z = position.Z })
+    inputName.Text = ""
+    saveToFile()
+    refreshList()
+    tpStatus.Text = name .. " tersimpan"
+end))
+
+table.insert(connections, tpCoordsButton.Activated:Connect(function()
+    local position = parseCoords(inputCoords.Text)
+    if not position then
+        tpStatus.Text = "Format salah. Contoh: 10, 5, -20"
+        return
+    end
+    if teleportTo(position) then
+        tpStatus.Text = "Teleport ke koordinat"
+    end
+end))
+
+-- Posisi karakter sekarang, diperbarui terus
+task.spawn(function()
+    while isAlive do
+        local _, rootPart = getRoot()
+        if rootPart then
+            local p = rootPart.Position
+            currentPosLabel.Text = string.format("Posisi: %.1f, %.1f, %.1f", p.X, p.Y, p.Z)
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- ==========================================================
+-- MEMATIKAN SCRIPT
+-- ==========================================================
+local function stopScript()
+    isActive = false
+    isAlive = false
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+    gui:Destroy()
+    _G.StopSimpleClicker = nil
+end
+
+_G.StopSimpleClicker = stopScript
+
+-- ==========================================================
+-- CARI POSISI MOUSE / TOUCH
+-- ==========================================================
+local lastX, lastY = nil, nil
+
+local function isInsidePanel(position)
+    local panelPosition = frame.AbsolutePosition
+    local panelSize = frame.AbsoluteSize
+    return position.X >= panelPosition.X
+        and position.X <= panelPosition.X + panelSize.X
+        and position.Y >= panelPosition.Y
+        and position.Y <= panelPosition.Y + panelSize.Y
+end
+
+-- Posisi mouse (PC)
+table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+    if isMobileMode or input.UserInputType ~= Enum.UserInputType.MouseMovement then
+        return
+    end
+    local position = UserInputService:GetMouseLocation()
+    lastX, lastY = math.floor(position.X), math.floor(position.Y)
+    positionLabel.Text = string.format("Mouse X: %d | Y: %d", lastX, lastY)
+end))
+
+-- Posisi sentuhan (Mobile)
+local function updateTouch(touch)
+    if not isMobileMode or isInsidePanel(touch.Position) then
+        return
+    end
+    local inset = GuiService:GetGuiInset()
+    lastX = math.floor(touch.Position.X + inset.X)
+    lastY = math.floor(touch.Position.Y + inset.Y)
+    positionLabel.Text = string.format("Touch X: %d | Y: %d", lastX, lastY)
+end
+
+table.insert(connections, UserInputService.TouchStarted:Connect(updateTouch))
+table.insert(connections, UserInputService.TouchMoved:Connect(updateTouch))
+
+local function usePosition()
+    if lastX and lastY then
+        inputX.Text = tostring(lastX)
+        inputY.Text = tostring(lastY)
+    end
+end
+
+-- ==========================================================
+-- TOMBOL DAN SHORTCUT
+-- ==========================================================
+table.insert(connections, clickerTab.Activated:Connect(function()
+    showTab("clicker")
+end))
+table.insert(connections, teleportTab.Activated:Connect(function()
+    showTab("teleport")
+end))
+table.insert(connections, toggleButton.Activated:Connect(toggleClicker))
+table.insert(connections, pickButton.Activated:Connect(usePosition))
+table.insert(connections, exitButton.Activated:Connect(stopScript))
+table.insert(connections, modeButton.Activated:Connect(function()
+    stopClicker()
+    isMobileMode = not isMobileMode
+    lastX, lastY = nil, nil
+    applyMode()
+end))
+
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed or UserInputService:GetFocusedTextBox() then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.Zero then
+        toggleClicker()
+    elseif input.KeyCode == Enum.KeyCode.P then
+        local position = UserInputService:GetMouseLocation()
+        inputX.Text = tostring(math.floor(position.X))
+        inputY.Text = tostring(math.floor(position.Y))
+    elseif input.KeyCode == Enum.KeyCode.End then
+        stopScript()
+    end
+end))
+
+-- ==========================================================
+-- LOOP UTAMA
+-- ==========================================================
+task.spawn(function()
+    while isAlive do
+        if isActive then
+            runClicks()
+        else
+            task.wait(0.1)
+        end
+    end
+end)
