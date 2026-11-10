@@ -146,7 +146,7 @@ end
 local positionLabel = createLabel(5, 25, "Mouse X: 0 | Y: 0")
 local inputX = createTextBox(32, "Target X", "400")
 local inputY = createTextBox(65, "Target Y", "300")
-local inputAmount = createTextBox(98, "Jumlah klik per putaran", "1")
+local inputAmount = createTextBox(98, "Tekan F per putaran", "1")
 local inputDelay = createTextBox(131, "Setiap ... detik", "15")
 
 local modeButton = createButton(164, 26, "", Color3.fromRGB(80, 80, 80))
@@ -331,15 +331,11 @@ local function tapOnce()
     end
 end
 
+-- Tab CLICKER: tekan F (bukan klik mouse di X,Y)
 local function clickOnce()
-    if isMobileMode then
-        tapOnce()
-        return
-    end
-
-    VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, true, game, 0)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
     task.wait(HOLD_TIME)
-    VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, false, game, 0)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
 end
 
 -- Loop: klik [jumlah] kali, tunggu [delay] detik, ulang terus sampai STOP
@@ -354,7 +350,7 @@ local function runClicks()
                 return
             end
             clickOnce()
-            infoLabel.Text = string.format("Putaran %d | Klik %d/%d", round, i, clickAmount)
+            infoLabel.Text = string.format("Putaran %d | F %d/%d", round, i, clickAmount)
             if i < clickAmount and not waitFor(CLICK_GAP) then
                 return
             end
