@@ -790,7 +790,7 @@ do
     local positionLabel = createLabel(5, 22, "Mouse X: 0 | Y: 0")
     local inputX = createTextBox(30, "Klik X", "1525")
     local inputY = createTextBox(58, "Klik Y", "463")
-    local inputClicks = createTextBox(86, "Klik per ore", "1")
+    local inputClicks = createTextBox(86, "Tekan F per ore", "1")
     local inputWait = createTextBox(114, "Timeout ore hilang (dtk)", "20")
     local inputHeight = createTextBox(142, "Tinggi di atas ore", "3")
 
@@ -1400,11 +1400,11 @@ do
             if not target.ore.Parent then
                 break -- ore sudah hilang, berarti tertambang
             end
-            setStatus(string.format("Mining %s (%s) | klik %d/%d | total %d", target.name, target.oreType, i, settings.clicks, mined))
-            if not clickOnce(settings.x, settings.y) then
-                stopMiner("Touch tidak didukung executor ini")
-                return
-            end
+            setStatus(string.format("Mining %s (%s) | F %d/%d | total %d", target.name, target.oreType, i, settings.clicks, mined))
+            -- Tekan F (bukan klik mouse di X,Y)
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            task.wait(HOLD_TIME)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
             if not waitFor(CLICK_GAP) then return end
         end
 
