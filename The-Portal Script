@@ -703,6 +703,8 @@ do
     local PICKUP_PART_NAME = "Mat_StoneMesh" -- hanya ambil item dengan PrimaryPart ini. nil = semua item
     local PICKUP_CLICKS = 2                 -- klik per item
     local PICKUP_DISTANCE = 4               -- jarak berdiri dari item saat mengambil (stud)
+    local ORE_GONE_WAIT = 2   -- tunggu sekian detik setelah ore hilang
+    local DROP_CLEAR_WAIT = 2 -- drop harus kosong selama sekian detik berturut-turut sebelum lanjut
     local DROP_GRACE = 1                    -- setelah ore hilang, tunggu sebentar kalau-kalau drop baru muncul (dtk)
 
     -- Jenis ore prioritas rendah: ditambang hanya kalau tidak ada jenis lain yang bisa dituju
@@ -1440,13 +1442,22 @@ do
         end
         mined += 1
 
+        -- Ore sudah hilang: tunggu 2 detik dulu sebelum lanjut
+        toggleButton.Text = "OFF | ore hilang, tunggu 2 dtk"
+        if not waitFor(ORE_GONE_WAIT) then
+            inCooldown = false
+            return
+        end
+
         -- 5. Tunggu drop hilang. Drop bisa muncul sedikit telat setelah ore hancur,
         --    jadi beri jeda singkat (DROP_GRACE) sebelum memutuskan "tidak ada drop".
-        local graceUntil = os.clock() + DROP_GRACE
+        -- Drop dianggap benar-benar habis kalau tidak ada drop selama DROP_CLEAR_WAIT detik berturut-turut
+        local emptySince = nil
         while true do
             local drops = findDrops(target.position)
 
             if #drops > 0 then
+                emptySince = nil
                 if PICKUP_ENABLED then
                     toggleButton.Text = string.format("OFF | ambil %d drop", #drops)
                     if not collectDrops(target.position) then
@@ -1456,10 +1467,13 @@ do
                 else
                     toggleButton.Text = string.format("OFF | tunggu %d drop hilang", #drops)
                 end
-            elseif os.clock() >= graceUntil then
-                break -- ore hilang dan drop sudah habis: ON lagi
             else
-                toggleButton.Text = "OFF | cek drop"
+                emptySince = emptySince or os.clock()
+                local left = DROP_CLEAR_WAIT - (os.clock() - emptySince)
+                if left <= 0 then
+                    break -- drop sudah habis selama 2 detik: ON lagi
+                end
+                toggleButton.Text = string.format("OFF | drop habis, cek %.1f dtk", left)
             end
 
             setStatus(string.format("%s (%s) | ore %d", target.name, target.oreType, mined))
