@@ -213,7 +213,7 @@ listPadding.PaddingLeft = UDim.new(0, 3)
 listPadding.PaddingRight = UDim.new(0, 8)
 listPadding.Parent = listFrame
 
-local PAGE_HEIGHTS = { miner = 390, clicker = 298, teleport = 332 }
+local PAGE_HEIGHTS = { miner = 420, clicker = 298, teleport = 332 }
 local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
 local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
 
@@ -790,7 +790,7 @@ do
     local inputY = createTextBox(58, "Klik Y", "463")
     local inputClicks = createTextBox(86, "Tekan F per ore", "1")
     local inputWait = createTextBox(114, "Timeout ore hilang (dtk)", "20")
-    local inputHeight = createTextBox(142, "Tinggi di atas ore", "3")
+    local inputHeight = createTextBox(142, "Tinggi dari ore (-5 = di bawah)", "-5")
 
     local modeButton = createButton(172, 24, "", Color3.fromRGB(80, 80, 80))
     local pickButton = createButton(200, 24, "", Color3.fromRGB(60, 80, 130))
@@ -842,7 +842,10 @@ do
         box:GetPropertyChangedSignal("Text"):Connect(saveMinerState)
     end
 
-    local statusLabel = createLabel(322, 60, "Siap")
+    -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
+    local lookUpButton = createButton(322, 24, "HADAP ATAS: OFF", Color3.fromRGB(120, 30, 30))
+
+    local statusLabel = createLabel(350, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
     statusLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
 
@@ -1081,6 +1084,161 @@ do
     end
 
     -- ==========================================================
+    -- HADAP ATAS: badan rebah menghadap atas + kamera mendongak, dipaksa tiap frame
+    -- ==========================================================
+    local lookUpEnabled = false
+
+    -- ==========================================================
+    -- ANTI BERENANG: matikan state & animasi renang selama miner berjalan
+    -- ==========================================================
+    local NO_SWIM = true
+
+    local function setSwimEnabled(enabled)
+        local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then
+            return
+        end
+        pcall(function()
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming, enabled)
+        end)
+        if not enabled then
+            -- Hentikan animasi renang yang sudah terlanjur jalan
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    local name = (track.Name .. " " .. (track.Animation and track.Animation.Name or "")):lower()
+                    if name:find("swim", 1, true) then
+                        track:Stop(0)
+                    end
+                end
+            end
+            if humanoid:GetState() == Enum.HumanoidStateType.Swimming then
+                humanoid:ChangeState(Enum.HumanoidStateType.Running)
+            end
+        end
+    end
+
+    -- Dicek tiap 0.5 detik: selama miner jalan, renang dimatikan (juga setelah respawn)
+    task.spawn(function()
+        local swimOff = false
+        while isAlive do
+            local shouldBlock = NO_SWIM and isActive
+            if shouldBlock then
+                setSwimEnabled(false)
+                swimOff = true
+            elseif swimOff then
+                setSwimEnabled(true)
+                swimOff = false
+            end
+            task.wait(0.5)
+        end
+        if swimOff then
+            setSwimEnabled(true)
+        end
+    end)
+    local LOOK_UP_TILT = 90   -- derajat badan rebah ke belakang (90 = telentang menghadap atas)
+    local CAMERA_BIND = "ToolkitMinerLookUp"
+
+    local function setStandStates(enabled, humanoid)
+        for _, state in ipairs({
+            Enum.HumanoidStateType.GettingUp,
+            Enum.HumanoidStateType.Running,
+            Enum.HumanoidStateType.Freefall,
+            Enum.HumanoidStateType.FallingDown,
+        }) do
+            pcall(function()
+                humanoid:SetStateEnabled(state, enabled)
+            end)
+        end
+    end
+
+    -- Kembalikan badan & kamera normal
+    local function releaseLookUp()
+        pcall(function()
+            RunService:UnbindFromRenderStep(CAMERA_BIND)
+        end)
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if rootPart then
+            rootPart.Anchored = false
+            local look = rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+            if look.Magnitude < 0.01 then
+                look = rootPart.CFrame.UpVector * Vector3.new(1, 0, 1)
+            end
+            if look.Magnitude > 0.01 then
+                rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + look.Unit)
+            end
+        end
+        if humanoid then
+            setStandStates(true, humanoid)
+            humanoid.PlatformStand = false
+            humanoid.AutoRotate = true
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end
+
+    -- Dipanggil setiap selesai teleport: rebahkan badan di posisi itu & kunci kamera ke atas
+    local function applyLookUp()
+        if not lookUpEnabled then
+            return
+        end
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not rootPart then
+            return
+        end
+        if humanoid then
+            humanoid.AutoRotate = false
+            humanoid.PlatformStand = true
+            setStandStates(false, humanoid)
+        end
+        local holdCFrame = CFrame.new(rootPart.Position) * CFrame.Angles(math.rad(LOOK_UP_TILT), 0, 0)
+        rootPart.CFrame = holdCFrame
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+        rootPart.Anchored = true
+
+        pcall(function()
+            RunService:UnbindFromRenderStep(CAMERA_BIND)
+        end)
+        RunService:BindToRenderStep(CAMERA_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+            if not lookUpEnabled or not isActive then
+                return
+            end
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not root then
+                return
+            end
+            -- Badan tetap rebah
+            root.CFrame = holdCFrame
+            -- Kamera di kepala, mendongak lurus ke atas
+            local camera = workspace.CurrentCamera
+            camera.CameraType = Enum.CameraType.Scriptable
+            local eye = root.Position + Vector3.new(0, 1, 0)
+            camera.CFrame = CFrame.lookAt(eye, eye + Vector3.new(0, 10, 0.01))
+        end)
+    end
+
+    table.insert(connections, lookUpButton.Activated:Connect(function()
+        lookUpEnabled = not lookUpEnabled
+        if lookUpEnabled then
+            lookUpButton.Text = "HADAP ATAS: ON"
+            lookUpButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+            if isActive then
+                applyLookUp()
+            end
+        else
+            lookUpButton.Text = "HADAP ATAS: OFF"
+            lookUpButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+            pcall(releaseLookUp)
+        end
+    end))
+
+    -- ==========================================================
     -- START / STOP
     -- ==========================================================
     local function loadSettings()
@@ -1105,6 +1263,9 @@ do
     local function stopMiner(reason)
         isActive = false
         inCooldown = false
+        if lookUpEnabled then
+            pcall(releaseLookUp)
+        end
         markTarget(nil)
         toggleButton.Text = "START"
         toggleButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
@@ -1188,8 +1349,10 @@ do
         local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, 3, 0)
         local lookAt = Vector3.new(part.Position.X, standAt.Y, part.Position.Z)
 
+        rootPart.Anchored = false -- lepas kunci "hadap atas" sebentar supaya bisa pindah
         character:PivotTo(CFrame.lookAt(standAt, lookAt))
         rootPart.AssemblyLinearVelocity = Vector3.zero
+        applyLookUp() -- kunci lagi di posisi baru (kalau HADAP ATAS aktif)
         return true
     end
 
@@ -1390,7 +1553,14 @@ do
         markTarget(target)
         currentTarget = target
         setStatus("Ke " .. target.name .. " (" .. target.oreType .. ")")
+        if lookUpEnabled then
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.Anchored = false -- lepas dulu supaya bisa dipindah
+            end
+        end
         teleportTo(target.position, settings.height)
+        applyLookUp()
         if not waitFor(0.3) then return end -- beri waktu karakter mendarat
 
         -- 3. Klik di X,Y sampai ore habis atau jumlah klik tercapai
@@ -1624,6 +1794,9 @@ do
     local function stopScript()
         isActive = false
         isAlive = false
+        if lookUpEnabled then
+            pcall(releaseLookUp)
+        end
         for other in pairs(playerMarks) do
             removeMark(other)
         end
