@@ -4,7 +4,7 @@
 -- Tab TELEPORT: simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
 -- Contoh: jumlah 5, delay 3 = klik 5x, tunggu 3 detik, klik 5x lagi, dst.
 -- 0 = start/stop tab yang sedang terbuka | P = ambil posisi mouse | X = mark SP (miner)
--- G = jendela Gold Status | Tombol X di panel atau End = matikan semuanya
+-- G = jendela Gold Status | L = jendela F Listener | Tombol X di panel atau End = matikan semuanya
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
@@ -19,6 +19,7 @@ local MIN_DELAY = 0.1    -- delay paling kecil yang diizinkan
 local MAX_CLICKS = 1000  -- batas jumlah klik per putaran
 
 local player = Players.LocalPlayer
+local scriptFTime = 0 -- kapan toolkit terakhir menekan F (supaya F Listener bisa membedakan F dari script vs dari kamu)
 local TP_HEIGHT = 3                            -- teleport sedikit di atas titik supaya tidak nyangkut
 local SAVE_FILE = "macro_teleport_points.json" -- sama dengan script macro, jadi lokasi tersimpan dipakai bersama
 
@@ -333,6 +334,7 @@ end
 
 -- Tab CLICKER: tekan F (bukan klik mouse di X,Y)
 local function clickOnce()
+    scriptFTime = os.clock()
     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
     task.wait(HOLD_TIME)
     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
@@ -1691,6 +1693,7 @@ do
             end
             setStatus(string.format("Mining %s (%s) | F %d/%d | total %d", target.name, target.oreType, i, settings.clicks, mined))
             -- Tekan F (bukan klik mouse di X,Y)
+            scriptFTime = os.clock()
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
             task.wait(HOLD_TIME)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
@@ -2593,6 +2596,231 @@ do
             statusFrame.Visible = not statusFrame.Visible
         end
     end))
+end
+
+-- ==========================================================
+-- JENDELA TERPISAH: F LISTENER (apa yang terhubung ke tombol F di game)
+-- ==========================================================
+-- Tombol SCAN = cari aksi & ProximityPrompt yang memakai F.
+-- Setiap F ditekan: catat animasi, UI yang muncul, tool yang dipegang, dan prompt yang dipicu.
+-- Tombol "–" = sembunyikan, L = tampilkan/sembunyikan lagi.
+do
+    local ContextActionService = game:GetService("ContextActionService")
+    local ProximityPromptService = game:GetService("ProximityPromptService")
+    local MAX_LOG = 30 -- baris log maksimal (dibuat sekali, dipakai ulang supaya hemat memori)
+
+    local listenerFrame = Instance.new("Frame")
+    listenerFrame.Size = UDim2.new(0, 260, 0, 360)
+    listenerFrame.Position = UDim2.new(0.5, -130, 0, 100)
+    listenerFrame.BackgroundColor3 = Color3.fromRGB(40, 30, 50) -- ungu gelap, beda dari jendela lain
+    listenerFrame.BorderSizePixel = 0
+    listenerFrame.Parent = gui
+    Instance.new("UICorner", listenerFrame).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIDragDetector", listenerFrame)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -40, 0, 28)
+    title.Position = UDim2.new(0, 12, 0, 2)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(210, 170, 255)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Text = "F LISTENER"
+    title.Parent = listenerFrame
+
+    local hideButton = Instance.new("TextButton")
+    hideButton.Size = UDim2.new(0, 20, 0, 20)
+    hideButton.Position = UDim2.new(1, -25, 0, 6)
+    hideButton.BackgroundColor3 = Color3.fromRGB(80, 60, 100)
+    hideButton.BorderSizePixel = 0
+    hideButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    hideButton.Font = Enum.Font.SourceSansBold
+    hideButton.TextSize = 12
+    hideButton.Text = "–"
+    hideButton.Parent = listenerFrame
+    Instance.new("UICorner", hideButton).CornerRadius = UDim.new(0, 4)
+
+    local function smallButton(xScale, text, color)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0.5, -16, 0, 24)
+        button.Position = UDim2.new(xScale, xScale == 0 and 12 or 4, 0, 32)
+        button.BackgroundColor3 = color
+        button.BorderSizePixel = 0
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.Font = Enum.Font.SourceSansBold
+        button.TextSize = 12
+        button.Text = text
+        button.Parent = listenerFrame
+        Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+        return button
+    end
+
+    local scanButton = smallButton(0, "SCAN F", Color3.fromRGB(110, 70, 150))
+    local clearButton = smallButton(0.5, "CLEAR LOG", Color3.fromRGB(80, 80, 80))
+
+    local logList = Instance.new("ScrollingFrame")
+    logList.Size = UDim2.new(1, -24, 1, -68)
+    logList.Position = UDim2.new(0, 12, 0, 62)
+    logList.BackgroundColor3 = Color3.fromRGB(25, 20, 32)
+    logList.BorderSizePixel = 0
+    logList.ScrollBarThickness = 5
+    logList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    logList.CanvasSize = UDim2.new(0, 0, 0, 0)
+    logList.Parent = listenerFrame
+    Instance.new("UICorner", logList).CornerRadius = UDim.new(0, 6)
+
+    local logLayout = Instance.new("UIListLayout")
+    logLayout.Padding = UDim.new(0, 2)
+    logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    logLayout.Parent = logList
+
+    local logPadding = Instance.new("UIPadding")
+    logPadding.PaddingLeft = UDim.new(0, 4)
+    logPadding.PaddingRight = UDim.new(0, 8)
+    logPadding.PaddingTop = UDim.new(0, 3)
+    logPadding.Parent = logList
+
+    local logRows = {}
+    for i = 1, MAX_LOG do
+        local row = Instance.new("TextLabel")
+        row.Size = UDim2.new(1, 0, 0, 0)
+        row.AutomaticSize = Enum.AutomaticSize.Y
+        row.BackgroundTransparency = 1
+        row.TextColor3 = Color3.fromRGB(230, 230, 230)
+        row.Font = Enum.Font.Code
+        row.TextSize = 12
+        row.TextWrapped = true
+        row.TextXAlignment = Enum.TextXAlignment.Left
+        row.LayoutOrder = i
+        row.Visible = false
+        row.Parent = logList
+        logRows[i] = row
+    end
+
+    local logs = {} -- { text, color }, terbaru di depan
+
+    local function renderLog()
+        for i = 1, MAX_LOG do
+            local entry = logs[i]
+            logRows[i].Visible = entry ~= nil
+            if entry then
+                logRows[i].Text = entry.text
+                logRows[i].TextColor3 = entry.color
+            end
+        end
+    end
+
+    local function addLog(text, color)
+        table.insert(logs, 1, { text = os.date("%H:%M:%S ") .. text, color = color or Color3.fromRGB(230, 230, 230) })
+        if #logs > MAX_LOG then
+            table.remove(logs)
+        end
+        renderLog()
+    end
+
+    -- SCAN: aksi ContextActionService & ProximityPrompt yang memakai F
+    table.insert(connections, scanButton.Activated:Connect(function()
+        local found = 0
+        for actionName, info in pairs(ContextActionService:GetAllBoundActionInfo()) do
+            for _, key in ipairs(info.inputTypes or {}) do
+                if key == Enum.KeyCode.F then
+                    addLog("Aksi F: " .. tostring(actionName), Color3.fromRGB(255, 215, 90))
+                    found += 1
+                end
+            end
+        end
+        local prompts = 0
+        for _, prompt in ipairs(workspace:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") and prompt.KeyboardKeyCode == Enum.KeyCode.F then
+                prompts += 1
+                if prompts <= 10 then
+                    addLog(string.format("Prompt F: %s (%s)", prompt.Parent and prompt.Parent.Name or "?",
+                        prompt.ActionText), Color3.fromRGB(150, 220, 255))
+                end
+            end
+        end
+        addLog(string.format("SCAN selesai: %d aksi, %d prompt memakai F", found, prompts),
+            Color3.fromRGB(200, 170, 255))
+    end))
+
+    table.insert(connections, clearButton.Activated:Connect(function()
+        logs = {}
+        renderLog()
+    end))
+
+    -- Setiap F ditekan: catat yang terlihat berubah
+    local function visibleGuis()
+        local visible = {}
+        for _, guiObject in ipairs(player.PlayerGui:GetDescendants()) do
+            if guiObject:IsA("GuiObject") and guiObject.Visible then
+                visible[guiObject] = true
+            end
+        end
+        return visible
+    end
+
+    local busy = false
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if input.KeyCode ~= Enum.KeyCode.F or not listenerFrame.Visible or busy then
+            return
+        end
+        busy = true -- satu pengamatan per F, supaya tidak menumpuk saat miner spam F
+        local fromScript = os.clock() - scriptFTime < 0.3
+        addLog(string.format("F ditekan (%s) | gameProcessed=%s",
+            fromScript and "oleh toolkit" or "oleh kamu", tostring(gameProcessed)),
+            Color3.fromRGB(255, 255, 255))
+
+        task.spawn(function()
+            local before = visibleGuis()
+            task.wait(0.5)
+
+            local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    addLog("  Animasi: " .. track.Name, Color3.fromRGB(170, 255, 170))
+                end
+            end
+
+            local newGuis = 0
+            for guiObject in pairs(visibleGuis()) do
+                if not before[guiObject] and not guiObject:IsDescendantOf(gui) then
+                    newGuis += 1
+                    if newGuis <= 5 then
+                        addLog("  UI muncul: " .. guiObject.Name, Color3.fromRGB(150, 220, 255))
+                    end
+                end
+            end
+
+            local tool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                addLog("  Tool dipegang: " .. tool.Name, Color3.fromRGB(255, 200, 150))
+            end
+            busy = false
+        end)
+    end))
+
+    table.insert(connections, ProximityPromptService.PromptTriggered:Connect(function(prompt)
+        if listenerFrame.Visible then
+            addLog(string.format("  Prompt dipicu: %s (%s)", prompt.Parent and prompt.Parent.Name or "?",
+                prompt.ActionText), Color3.fromRGB(255, 215, 90))
+        end
+    end))
+
+    table.insert(connections, hideButton.Activated:Connect(function()
+        listenerFrame.Visible = false
+    end))
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.L then
+            listenerFrame.Visible = not listenerFrame.Visible
+        end
+    end))
+
+    addLog("F Listener siap. Tekan SCAN F, lalu tekan F di game.", Color3.fromRGB(200, 170, 255))
 end
 
 -- ==========================================================
