@@ -843,7 +843,7 @@ do
     end
 
     -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
-    local lookUpButton = createButton(322, 24, "HADAP ATAS: OFF", Color3.fromRGB(120, 30, 30))
+    local lookUpButton = createButton(322, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
 
     local statusLabel = createLabel(350, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
@@ -1136,7 +1136,7 @@ do
             setSwimEnabled(true)
         end
     end)
-    local LOOK_UP_TILT = 90   -- derajat badan rebah ke belakang (90 = telentang menghadap atas)
+    local LOOK_UP_TILT = 180  -- 180 = terbalik (kepala di bawah, kaki di atas). 90 = telentang
     local CAMERA_BIND = "ToolkitMinerLookUp"
 
     local function setStandStates(enabled, humanoid)
@@ -1213,26 +1213,21 @@ do
             if not root then
                 return
             end
-            -- Badan tetap rebah
+            -- Badan tetap terbalik. Kamera TIDAK dikunci, jadi tetap bisa digerakkan bebas.
             root.CFrame = holdCFrame
-            -- Kamera di kepala, mendongak lurus ke atas
-            local camera = workspace.CurrentCamera
-            camera.CameraType = Enum.CameraType.Scriptable
-            local eye = root.Position + Vector3.new(0, 1, 0)
-            camera.CFrame = CFrame.lookAt(eye, eye + Vector3.new(0, 10, 0.01))
         end)
     end
 
     table.insert(connections, lookUpButton.Activated:Connect(function()
         lookUpEnabled = not lookUpEnabled
         if lookUpEnabled then
-            lookUpButton.Text = "HADAP ATAS: ON"
+            lookUpButton.Text = "TERBALIK: ON"
             lookUpButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
             if isActive then
                 applyLookUp()
             end
         else
-            lookUpButton.Text = "HADAP ATAS: OFF"
+            lookUpButton.Text = "TERBALIK: OFF"
             lookUpButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
             pcall(releaseLookUp)
         end
