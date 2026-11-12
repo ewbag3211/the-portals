@@ -151,7 +151,7 @@ local inputDelay = createTextBox(131, "Setiap ... detik", "15")
 
 local modeButton = createButton(164, 26, "", Color3.fromRGB(80, 80, 80))
 local pickButton = createButton(197, 26, "AMBIL POSISI TOUCH", Color3.fromRGB(60, 80, 130))
-local toggleButton = createButton(258, 30, "START", Color3.fromRGB(20, 120, 60))
+local toggleButton = createButton(286, 30, "START", Color3.fromRGB(20, 120, 60))
 toggleButton.TextSize = 14
 
 local infoLabel = createLabel(264, 30, "Putaran: 0")
@@ -213,7 +213,7 @@ listPadding.PaddingLeft = UDim.new(0, 3)
 listPadding.PaddingRight = UDim.new(0, 8)
 listPadding.Parent = listFrame
 
-local PAGE_HEIGHTS = { miner = 462, clicker = 298, teleport = 332 }
+local PAGE_HEIGHTS = { miner = 490, clicker = 298, teleport = 332 }
 local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
 local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
 
@@ -695,8 +695,14 @@ do
     local PICKUP_USE_REMOTE = true          -- true = ambil lewat RequestPickupItem, false = klik item di layar
     local PICKUP_RETRY = 1                  -- kirim ulang permintaan pickup tiap sekian detik selama item masih ada
     local PICKUP_MAX_TRY = 5                -- berhenti mencoba item ini setelah sekian kali (misal drop milik orang lain)
-    local PICKUP_RADIUS = 15                -- cari drop sejauh ini dari karakter (stud)
-    local PICKUP_PART_NAME = "Mat_StoneMesh" -- hanya ambil item dengan PrimaryPart ini. nil = semua item
+    -- (radius ambil drop sekarang diatur dari kolom "Radius ambil drop" di panel)
+    -- Drop yang diambil (nama PrimaryPart, harus persis). Drop lain diabaikan.
+    local PICKUP_PARTS = {
+        "Mat_GoldVeinedQuartz_GoldMesh",
+        "Mat_HematiteMesh",
+        "Mat_AuroriteMesh",
+        "Mat_GalenaMesh",
+    }
     local PICKUP_CLICKS = 2                 -- klik per item
     local PICKUP_DISTANCE = 4               -- jarak berdiri dari item saat mengambil (stud)
     local ORE_GONE_WAIT = 2   -- tunggu sekian detik setelah ore hilang
@@ -822,21 +828,22 @@ do
     local inputWait = createField(114, "Timeout ore hilang (dtk)", "20", "detik")
     local inputHeight = createField(142, "Offset Y teleport ke ore", "-5", "stud")
     local inputDropHeight = createField(170, "Offset Y ambil drop", "-5", "stud")
+    local inputPickupRadius = createField(198, "Radius ambil drop", "30", "stud")
 
-    local modeButton = createButton(200, 24, "", Color3.fromRGB(80, 80, 80))
-    local pickButton = createButton(228, 24, "", Color3.fromRGB(60, 80, 130))
+    local modeButton = createButton(228, 24, "", Color3.fromRGB(80, 80, 80))
+    local pickButton = createButton(256, 24, "", Color3.fromRGB(60, 80, 130))
     local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
     toggleButton.TextSize = 14
     -- Tandai SP yang sedang dituju sebagai salah taruh, lalu lewati
-    local markButton = createButton(292, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
+    local markButton = createButton(320, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
 
     -- Daftar SP yang dilewati. Bisa diedit manual: hapus nama untuk un-mark.
-    local skipLabel = createLabel(320, 14, "SP di-skip:")
+    local skipLabel = createLabel(348, 14, "SP di-skip:")
     skipLabel.Font = Enum.Font.SourceSans
     skipLabel.TextSize = 12
     skipLabel.TextXAlignment = Enum.TextXAlignment.Left
     skipLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    local inputIgnore = createTextBox(334, "Skip: SP3, SP12", "SP47, SP36, SP26")
+    local inputIgnore = createTextBox(362, "Skip: SP3, SP12", "SP47, SP36, SP26")
     inputIgnore.TextColor3 = Color3.fromRGB(255, 170, 120)
     inputIgnore.TextTruncate = Enum.TextTruncate.AtEnd
 
@@ -846,7 +853,7 @@ do
     local MINER_SAVE_FILE = "auto_miner_settings.json"
     local savedBoxes = {
         x = inputX, y = inputY, clicks = inputClicks,
-        timeout = inputWait, skip = inputIgnore, -- kedua offset Y tidak disimpan, selalu mulai dari -5 -- tinggi TIDAK disimpan, selalu mulai dari -5
+        timeout = inputWait, skip = inputIgnore, pickupRadius = inputPickupRadius, -- kedua offset Y tidak disimpan, selalu mulai dari -5 -- tinggi TIDAK disimpan, selalu mulai dari -5
     }
 
     local function saveMinerState()
@@ -879,9 +886,9 @@ do
     end
 
     -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
-    local lookUpButton = createButton(364, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
+    local lookUpButton = createButton(392, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
 
-    local statusLabel = createLabel(392, 60, "Siap")
+    local statusLabel = createLabel(420, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
     statusLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
 
@@ -1363,6 +1370,7 @@ do
         settings.waitTime = math.max(waitTime, 0)
         settings.height = height -- contoh -5 = 5 stud di bawah titik Y ore
         settings.dropHeight = tonumber(inputDropHeight.Text) or -5
+        settings.pickupRadius = math.max(tonumber(inputPickupRadius.Text) or 30, 1)
         return true
     end
 
@@ -1400,7 +1408,7 @@ do
         end
     end
 
-    for _, box in ipairs({ inputX, inputY, inputClicks, inputWait, inputHeight, inputDropHeight, inputIgnore }) do
+    for _, box in ipairs({ inputX, inputY, inputClicks, inputWait, inputHeight, inputDropHeight, inputPickupRadius, inputIgnore }) do
         table.insert(connections, box.Focused:Connect(function()
             -- Saat timer OFF, kolom boleh diedit tanpa menghentikan miner
             if isActive and not inCooldown then
@@ -1419,19 +1427,23 @@ do
     -- ==========================================================
     -- AMBIL DROP (workspace.WorldItems)
     -- ==========================================================
+    -- Drop yang boleh dituju: ada di daftar PICKUP_PARTS DAN dalam radius dari KARAKTER
     local function findDrops(center)
         local folder = workspace:FindFirstChild("WorldItems")
         if not folder then
             return {}
         end
+        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        center = root and root.Position or center
+        local radius = settings.pickupRadius or 30
 
         local found = {}
         for _, item in ipairs(folder:GetChildren()) do
             local part = item:IsA("Model") and item.PrimaryPart
                 or (item:IsA("BasePart") and item)
-            if part and not givenUpDrops[item] and (not PICKUP_PART_NAME or part.Name == PICKUP_PART_NAME) then
+            if part and not givenUpDrops[item] and table.find(PICKUP_PARTS, part.Name) then
                 local distance = (part.Position - center).Magnitude
-                if distance <= PICKUP_RADIUS then
+                if distance <= radius then
                     table.insert(found, { item = item, part = part, distance = distance })
                 end
             end
@@ -1588,7 +1600,7 @@ do
             end
             if isPriority and not givenUpDrops[item] then
                 local distance = (part.Position - fromPosition).Magnitude
-                if distance < bestDistance then
+                if distance <= (settings.pickupRadius or 30) and distance < bestDistance then
                     best, bestDistance = { item = item, part = part }, distance
                 end
             end
