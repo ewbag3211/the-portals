@@ -213,7 +213,7 @@ listPadding.PaddingLeft = UDim.new(0, 3)
 listPadding.PaddingRight = UDim.new(0, 8)
 listPadding.Parent = listFrame
 
-local PAGE_HEIGHTS = { miner = 420, clicker = 298, teleport = 332 }
+local PAGE_HEIGHTS = { miner = 434, clicker = 298, teleport = 332 }
 local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
 local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
 
@@ -770,6 +770,36 @@ do
         return box
     end
 
+    -- Satu baris: [keterangan] [kolom angka]
+    local function createField(yPos, labelText, defaultText, hint)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0, 104, 0, 24)
+        label.Position = UDim2.new(0, 12, 0, yPos)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        label.Font = Enum.Font.SourceSans
+        label.TextSize = 12
+        label.TextWrapped = true
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = labelText
+        label.Parent = frame
+
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0, 70, 0, 24)
+        box.Position = UDim2.new(0, 118, 0, yPos)
+        box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        box.BorderSizePixel = 0
+        box.PlaceholderText = hint or ""
+        box.Text = defaultText
+        box.ClearTextOnFocus = false
+        box.TextColor3 = Color3.fromRGB(255, 255, 255)
+        box.Font = Enum.Font.SourceSansBold
+        box.TextSize = 13
+        box.Parent = frame
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+        return box
+    end
+
     local function createButton(yPos, height, text, color)
         local button = Instance.new("TextButton")
         button.Size = UDim2.new(0, 160, 0, height)
@@ -786,11 +816,11 @@ do
     end
 
     local positionLabel = createLabel(5, 22, "Mouse X: 0 | Y: 0")
-    local inputX = createTextBox(30, "Klik X", "1525")
-    local inputY = createTextBox(58, "Klik Y", "463")
-    local inputClicks = createTextBox(86, "Tekan F per ore", "1")
-    local inputWait = createTextBox(114, "Timeout ore hilang (dtk)", "20")
-    local inputHeight = createTextBox(142, "Tinggi dari ore (-5 = di bawah)", "-5")
+    local inputX = createField(30, "Posisi klik X (layar)", "1525", "x")
+    local inputY = createField(58, "Posisi klik Y (layar)", "463", "y")
+    local inputClicks = createField(86, "Tekan F per ore", "1", "kali")
+    local inputWait = createField(114, "Timeout ore hilang (dtk)", "20", "detik")
+    local inputHeight = createField(142, "Offset Y ore (minus = di bawah)", "-5", "stud")
 
     local modeButton = createButton(172, 24, "", Color3.fromRGB(80, 80, 80))
     local pickButton = createButton(200, 24, "", Color3.fromRGB(60, 80, 130))
@@ -800,7 +830,12 @@ do
     local markButton = createButton(264, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
 
     -- Daftar SP yang dilewati. Bisa diedit manual: hapus nama untuk un-mark.
-    local inputIgnore = createTextBox(292, "Skip: SP3, SP12", "SP47, SP36, SP26")
+    local skipLabel = createLabel(292, 14, "SP di-skip:")
+    skipLabel.Font = Enum.Font.SourceSans
+    skipLabel.TextSize = 12
+    skipLabel.TextXAlignment = Enum.TextXAlignment.Left
+    skipLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    local inputIgnore = createTextBox(306, "Skip: SP3, SP12", "SP47, SP36, SP26")
     inputIgnore.TextColor3 = Color3.fromRGB(255, 170, 120)
     inputIgnore.TextTruncate = Enum.TextTruncate.AtEnd
 
@@ -843,9 +878,9 @@ do
     end
 
     -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
-    local lookUpButton = createButton(322, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
+    local lookUpButton = createButton(336, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
 
-    local statusLabel = createLabel(350, 60, "Siap")
+    local statusLabel = createLabel(364, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
     statusLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
 
