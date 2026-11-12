@@ -810,7 +810,7 @@ do
     local MINER_SAVE_FILE = "auto_miner_settings.json"
     local savedBoxes = {
         x = inputX, y = inputY, clicks = inputClicks,
-        timeout = inputWait, height = inputHeight, skip = inputIgnore,
+        timeout = inputWait, skip = inputIgnore, -- tinggi TIDAK disimpan, selalu mulai dari -5
     }
 
     local function saveMinerState()
@@ -1325,7 +1325,7 @@ do
         settings.y = y
         settings.clicks = math.clamp(math.floor(clicks), 1, 1000)
         settings.waitTime = math.max(waitTime, 0)
-        settings.height = height
+        settings.height = height -- contoh -5 = 5 stud di bawah titik Y ore
         return true
     end
 
