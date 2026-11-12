@@ -886,7 +886,7 @@ do
     end
 
     -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
-    local lookUpButton = createButton(392, 24, "BERBARING: OFF", Color3.fromRGB(120, 30, 30))
+    local lookUpButton = createButton(392, 24, "KAMERA ATAS: OFF", Color3.fromRGB(120, 30, 30))
 
     local statusLabel = createLabel(420, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
@@ -1179,8 +1179,8 @@ do
             setSwimEnabled(true)
         end
     end)
-    local LOOK_UP_TILT = 90   -- 90 = berbaring telentang menghadap atas. 180 = terbalik
-    local CAMERA_PITCH = -15  -- sudut vertikal kamera yang dikunci (derajat). Minus = melihat ke bawah, plus = ke atas
+    local LOOK_UP_TILT = 0    -- badan tegak (tilt dimatikan). 90 = telentang, 180 = terbalik
+    local CAMERA_PITCH = 70   -- kamera dikunci MENDONGAK ke atas (derajat). Plus = ke atas, minus = ke bawah
     local CAMERA_SENSITIVITY = 0.4 -- kecepatan putar kiri/kanan
     local cameraYaw = 0
     local cameraDistance = 15
@@ -1338,13 +1338,13 @@ do
     table.insert(connections, lookUpButton.Activated:Connect(function()
         lookUpEnabled = not lookUpEnabled
         if lookUpEnabled then
-            lookUpButton.Text = "BERBARING: ON"
+            lookUpButton.Text = "KAMERA ATAS: ON"
             lookUpButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
             if isActive then
                 applyLookUp()
             end
         else
-            lookUpButton.Text = "BERBARING: OFF"
+            lookUpButton.Text = "KAMERA ATAS: OFF"
             lookUpButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
             pcall(releaseLookUp)
         end
