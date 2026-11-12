@@ -1138,6 +1138,16 @@ do
     end)
     local LOOK_UP_TILT = 180  -- 180 = terbalik (kepala di bawah, kaki di atas). 90 = telentang
     local CAMERA_PITCH = -15  -- sudut vertikal kamera yang dikunci (derajat). Minus = melihat ke bawah, plus = ke atas
+    local CAMERA_SENSITIVITY = 0.4 -- kecepatan putar kiri/kanan
+    local cameraYaw = 0
+    local cameraDistance = 15
+
+    -- Scroll mouse = zoom kamera saat terkunci
+    table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+        if lookUpEnabled and isActive and input.UserInputType == Enum.UserInputType.MouseWheel then
+            cameraDistance = math.clamp(cameraDistance - input.Position.Z * 2, 5, 60)
+        end
+    end))
     local CAMERA_BIND = "ToolkitMinerLookUp"
 
     local function setStandStates(enabled, humanoid)
@@ -1177,6 +1187,7 @@ do
     -- Kembalikan badan & kamera normal
     local function releaseLookUp()
         setAnimationsFrozen(false)
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
         pcall(function()
             RunService:UnbindFromRenderStep(CAMERA_BIND)
         end)
@@ -1220,6 +1231,11 @@ do
             setStandStates(false, humanoid)
         end
         setAnimationsFrozen(true)
+        -- Mulai dari arah kamera sekarang supaya tidak tiba-tiba berputar
+        local look = workspace.CurrentCamera.CFrame.LookVector * Vector3.new(1, 0, 1)
+        if look.Magnitude > 0.01 then
+            cameraYaw = math.atan2(-look.X, -look.Z)
+        end
         local holdCFrame = CFrame.new(rootPart.Position) * CFrame.Angles(math.rad(LOOK_UP_TILT), 0, 0)
         rootPart.CFrame = holdCFrame
         rootPart.AssemblyLinearVelocity = Vector3.zero
@@ -1237,8 +1253,10 @@ do
             if not root then
                 return
             end
-            -- Badan tetap terbalik & diam total
-            root.CFrame = holdCFrame
+            -- Badan tetap terbalik & diam total (hanya dikoreksi kalau bergeser, supaya tidak bergetar)
+            if (root.Position - holdCFrame.Position).Magnitude > 0.05 then
+                root.CFrame = holdCFrame
+            end
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
 
@@ -1251,22 +1269,26 @@ do
                 end
             end
 
-            -- Kamera: kiri/kanan bebas (ikut mouse), naik/turun dikunci di CAMERA_PITCH
+            -- Kamera dipegang penuh oleh script (tidak berebut dengan kamera bawaan = tidak getar).
+            -- Tahan klik kanan + geser mouse = putar kiri/kanan. Scroll = zoom. Naik/turun dikunci.
             local camera = workspace.CurrentCamera
-            if camera.CameraType == Enum.CameraType.Scriptable then
-                camera.CameraType = Enum.CameraType.Custom
+            camera.CameraType = Enum.CameraType.Scriptable
+
+            if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+                local delta = UserInputService:GetMouseDelta()
+                cameraYaw -= math.rad(delta.X * CAMERA_SENSITIVITY)
+            elseif UserInputService.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition then
+                UserInputService.MouseBehavior = Enum.MouseBehavior.Default
             end
-            local focus = camera.Focus.Position
-            local offset = camera.CFrame.Position - focus
-            local distance = offset.Magnitude
-            local flatLook = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
-            if distance > 0.1 and flatLook.Magnitude > 0.01 then
-                local yaw = math.atan2(-flatLook.X, -flatLook.Z)
-                camera.CFrame = CFrame.new(focus)
-                    * CFrame.Angles(0, yaw, 0)
-                    * CFrame.Angles(math.rad(CAMERA_PITCH), 0, 0)
-                    * CFrame.new(0, 0, distance)
-            end
+
+            -- Titik fokus tetap (posisi terkunci), bukan kepala karakter yang terbalik
+            local focus = holdCFrame.Position
+            camera.CFrame = CFrame.new(focus)
+                * CFrame.Angles(0, cameraYaw, 0)
+                * CFrame.Angles(math.rad(CAMERA_PITCH), 0, 0)
+                * CFrame.new(0, 0, cameraDistance)
+            camera.Focus = CFrame.new(focus)
         end)
     end
 
