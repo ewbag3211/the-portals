@@ -705,7 +705,7 @@ do
     }
     local PICKUP_CLICKS = 2                 -- klik per item
     local PICKUP_DISTANCE = 4               -- jarak berdiri dari item saat mengambil (stud)
-    local ORE_GONE_WAIT = 2   -- tunggu sekian detik setelah ore hilang
+    local ORE_GONE_WAIT = 0   -- tunggu sekian detik setelah ore hilang (0 = langsung cek drop)
     local DROP_CLEAR_WAIT = 2 -- drop harus kosong selama sekian detik berturut-turut sebelum lanjut
     local DROP_GRACE = 1                    -- setelah ore hilang, tunggu sebentar kalau-kalau drop baru muncul (dtk)
 
