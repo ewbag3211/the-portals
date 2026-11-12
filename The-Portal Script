@@ -821,7 +821,7 @@ do
     local inputClicks = createField(86, "Tekan F per ore", "1", "kali")
     local inputWait = createField(114, "Timeout ore hilang (dtk)", "20", "detik")
     local inputHeight = createField(142, "Offset Y teleport ke ore", "-5", "stud")
-    local inputDropHeight = createField(170, "Offset Y ambil drop", "3", "stud")
+    local inputDropHeight = createField(170, "Offset Y ambil drop", "-5", "stud")
 
     local modeButton = createButton(200, 24, "", Color3.fromRGB(80, 80, 80))
     local pickButton = createButton(228, 24, "", Color3.fromRGB(60, 80, 130))
@@ -846,7 +846,7 @@ do
     local MINER_SAVE_FILE = "auto_miner_settings.json"
     local savedBoxes = {
         x = inputX, y = inputY, clicks = inputClicks,
-        timeout = inputWait, skip = inputIgnore, dropHeight = inputDropHeight, -- tinggi TIDAK disimpan, selalu mulai dari -5
+        timeout = inputWait, skip = inputIgnore, -- kedua offset Y tidak disimpan, selalu mulai dari -5 -- tinggi TIDAK disimpan, selalu mulai dari -5
     }
 
     local function saveMinerState()
@@ -1362,7 +1362,7 @@ do
         settings.clicks = math.clamp(math.floor(clicks), 1, 1000)
         settings.waitTime = math.max(waitTime, 0)
         settings.height = height -- contoh -5 = 5 stud di bawah titik Y ore
-        settings.dropHeight = tonumber(inputDropHeight.Text) or 3
+        settings.dropHeight = tonumber(inputDropHeight.Text) or -5
         return true
     end
 
@@ -1455,7 +1455,7 @@ do
 
         local flat = (rootPart.Position - part.Position) * Vector3.new(1, 0, 1)
         local away = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, 1)
-        local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, settings.dropHeight or 3, 0)
+        local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, settings.dropHeight or -5, 0)
         local lookAt = Vector3.new(part.Position.X, standAt.Y, part.Position.Z)
 
         rootPart.Anchored = false -- lepas kunci "hadap atas" sebentar supaya bisa pindah
