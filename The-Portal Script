@@ -1137,6 +1137,2506 @@ do
         end
     end)
     local LOOK_UP_TILT = 180  -- 180 = terbalik (kepala di bawah, kaki di atas). 90 = telentang
+    local CAMERA_PITCH = -15  -- sudut vertikal kamera yang dikunci (derajat). Minus = melihat ke bawah, plus = ke atas
+    local CAMERA_BIND = "ToolkitMinerLookUp"
+
+    local function setStandStates(enabled, humanoid)
+        for _, state in ipairs({
+            Enum.HumanoidStateType.GettingUp,
+            Enum.HumanoidStateType.Running,
+            Enum.HumanoidStateType.Freefall,
+            Enum.HumanoidStateType.FallingDown,
+        }) do
+            pcall(function()
+                humanoid:SetStateEnabled(state, enabled)
+            end)
+        end
+    end
+
+    -- Kembalikan badan & kamera normal
+    local function releaseLookUp()
+        pcall(function()
+            RunService:UnbindFromRenderStep(CAMERA_BIND)
+        end)
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if rootPart then
+            rootPart.Anchored = false
+            local look = rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+            if look.Magnitude < 0.01 then
+                look = rootPart.CFrame.UpVector * Vector3.new(1, 0, 1)
+            end
+            if look.Magnitude > 0.01 then
+                rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + look.Unit)
+            end
+        end
+        if humanoid then
+            setStandStates(true, humanoid)
+            humanoid.PlatformStand = false
+            humanoid.AutoRotate = true
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end
+
+    -- Dipanggil setiap selesai teleport: rebahkan badan di posisi itu & kunci kamera ke atas
+    local function applyLookUp()
+        if not lookUpEnabled then
+            return
+        end
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not rootPart then
+            return
+        end
+        if humanoid then
+            humanoid.AutoRotate = false
+            humanoid.PlatformStand = true
+            setStandStates(false, humanoid)
+        end
+        local holdCFrame = CFrame.new(rootPart.Position) * CFrame.Angles(math.rad(LOOK_UP_TILT), 0, 0)
+        rootPart.CFrame = holdCFrame
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+        rootPart.Anchored = true
+
+        pcall(function()
+            RunService:UnbindFromRenderStep(CAMERA_BIND)
+        end)
+        RunService:BindToRenderStep(CAMERA_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+            if not lookUpEnabled or not isActive then
+                return
+            end
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not root then
+                return
+            end
+            -- Badan tetap terbalik
+            root.CFrame = holdCFrame
+
+            -- Kamera: kiri/kanan bebas (ikut mouse), naik/turun dikunci di CAMERA_PITCH
+            local camera = workspace.CurrentCamera
+            if camera.CameraType == Enum.CameraType.Scriptable then
+                camera.CameraType = Enum.CameraType.Custom
+            end
+            local focus = camera.Focus.Position
+            local offset = camera.CFrame.Position - focus
+            local distance = offset.Magnitude
+            local flatLook = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+            if distance > 0.1 and flatLook.Magnitude > 0.01 then
+                local yaw = math.atan2(-flatLook.X, -flatLook.Z)
+                camera.CFrame = CFrame.new(focus)
+                    * CFrame.Angles(0, yaw, 0)
+                    * CFrame.Angles(math.rad(CAMERA_PITCH), 0, 0)
+                    * CFrame.new(0, 0, distance)
+            end
+        end)
+    end
+
+    table.insert(connections, lookUpButton.Activated:Connect(function()
+        lookUpEnabled = not lookUpEnabled
+        if lookUpEnabled then
+            lookUpButton.Text = "TERBALIK: ON"
+            lookUpButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+            if isActive then
+                applyLookUp()
+            end
+        else
+            lookUpButton.Text = "TERBALIK: OFF"
+            lookUpButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+            pcall(releaseLookUp)
+        end
+    end))
+
+    -- ==========================================================
+    -- START / STOP
+    -- ==========================================================
+    local function loadSettings()
+        local x = tonumber(inputX.Text)
+        local y = tonumber(inputY.Text)
+        local clicks = tonumber(inputClicks.Text)
+        local waitTime = tonumber(inputWait.Text)
+        local height = tonumber(inputHeight.Text)
+
+        if not x or not y or not clicks or clicks < 1 or not waitTime or not height then
+            return false
+        end
+
+        settings.x = x
+        settings.y = y
+        settings.clicks = math.clamp(math.floor(clicks), 1, 1000)
+        settings.waitTime = math.max(waitTime, 0)
+        settings.height = height
+        return true
+    end
+
+    local function stopMiner(reason)
+        isActive = false
+        inCooldown = false
+        if lookUpEnabled then
+            pcall(releaseLookUp)
+        end
+        markTarget(nil)
+        toggleButton.Text = "START"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+        if reason then
+            setStatus(reason)
+        end
+    end
+
+    local function startMiner()
+        if not loadSettings() then
+            toggleButton.Text = "INPUT TIDAK VALID"
+            toggleButton.BackgroundColor3 = Color3.fromRGB(170, 110, 20)
+            return
+        end
+        skipped = {}
+        isActive = true
+        toggleButton.Text = "STOP"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+    end
+
+    local function toggleMiner()
+        if isActive then
+            stopMiner("Dihentikan")
+        else
+            startMiner()
+        end
+    end
+
+    for _, box in ipairs({ inputX, inputY, inputClicks, inputWait, inputHeight, inputIgnore }) do
+        table.insert(connections, box.Focused:Connect(function()
+            -- Saat timer OFF, kolom boleh diedit tanpa menghentikan miner
+            if isActive and not inCooldown then
+                stopMiner("Dihentikan untuk edit")
+            end
+        end))
+    end
+
+    -- ==========================================================
+    -- SATU PUTARAN MINING
+    -- ==========================================================
+    local mined = 0
+    local picked = 0
+    local givenUpDrops = {} -- [item] = true: drop yang gagal diambil, tidak ditunggu lagi
+
+    -- ==========================================================
+    -- AMBIL DROP (workspace.WorldItems)
+    -- ==========================================================
+    local function findDrops(center)
+        local folder = workspace:FindFirstChild("WorldItems")
+        if not folder then
+            return {}
+        end
+
+        local found = {}
+        for _, item in ipairs(folder:GetChildren()) do
+            local part = item:IsA("Model") and item.PrimaryPart
+                or (item:IsA("BasePart") and item)
+            if part and not givenUpDrops[item] and (not PICKUP_PART_NAME or part.Name == PICKUP_PART_NAME) then
+                local distance = (part.Position - center).Magnitude
+                if distance <= PICKUP_RADIUS then
+                    table.insert(found, { item = item, part = part, distance = distance })
+                end
+            end
+        end
+        table.sort(found, function(a, b)
+            return a.distance < b.distance
+        end)
+        return found
+    end
+
+    -- Berdiri di samping item, menghadap ke item
+    local function approachDrop(part)
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then
+            return false
+        end
+
+        local flat = (rootPart.Position - part.Position) * Vector3.new(1, 0, 1)
+        local away = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, 1)
+        local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, 3, 0)
+        local lookAt = Vector3.new(part.Position.X, standAt.Y, part.Position.Z)
+
+        rootPart.Anchored = false -- lepas kunci "hadap atas" sebentar supaya bisa pindah
+        character:PivotTo(CFrame.lookAt(standAt, lookAt))
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        applyLookUp() -- kunci lagi di posisi baru (kalau HADAP ATAS aktif)
+        return true
+    end
+
+    -- Ambil pickupId dari item, contoh nama "pickup_10940_1794084692"
+    local function getPickupId(item)
+        if item.Name:sub(1, 7) == "pickup_" then
+            return item.Name
+        end
+        local attribute = item:GetAttribute("pickupId")
+        if type(attribute) == "string" then
+            return attribute
+        end
+        return nil
+    end
+
+    -- Remote pickup dari game (dicari sekali, lalu disimpan)
+    local pickupRemote = nil
+    local function getPickupRemote()
+        if pickupRemote and pickupRemote.Parent then
+            return pickupRemote
+        end
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local inventory = remotes and remotes:FindFirstChild("Inventory")
+        pickupRemote = inventory and inventory:FindFirstChild("RequestPickupItem")
+        return pickupRemote
+    end
+
+    local function requestPickup(item)
+        local pickupId = getPickupId(item)
+        local remote = getPickupRemote()
+        if not pickupId or not remote then
+            return false
+        end
+        local ok = pcall(function()
+            remote:FireServer({ pickupId = pickupId })
+        end)
+        return ok
+    end
+
+    -- Klik tepat di posisi item di layar (bukan X,Y tetap)
+    local function clickDrop(part)
+        local camera = workspace.CurrentCamera
+        local screenPoint, onScreen = camera:WorldToViewportPoint(part.Position)
+        if not onScreen then
+            return false
+        end
+        return clickOnce(math.floor(screenPoint.X), math.floor(screenPoint.Y))
+    end
+
+    -- Hasil false = miner dihentikan di tengah jalan
+    collectDrops = function(center)
+        if not PICKUP_ENABLED then
+            return true
+        end
+
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then
+            return true
+        end
+
+        local drops = findDrops(center or rootPart.Position)
+        for index, drop in ipairs(drops) do
+            if not drop.item.Parent then
+                continue -- sudah diambil (oleh kita atau orang lain)
+            end
+
+            setStatus(string.format("Ambil drop %d/%d | %s", index, #drops, drop.item.Name))
+            approachDrop(drop.part)
+            if not waitFor(0.25) then return false end
+
+            if PICKUP_USE_REMOTE and getPickupId(drop.item) then
+                -- Minta pickup lewat remote, kirim ulang sampai item hilang
+                local tries = 0
+                while drop.item.Parent and tries < PICKUP_MAX_TRY do
+                    tries += 1
+                    if not requestPickup(drop.item) then
+                        setStatus("Remote pickup tidak ditemukan, pakai klik")
+                        break
+                    end
+                    if not waitFor(PICKUP_RETRY) then return false end
+                end
+            end
+
+            -- Cadangan: klik item di layar kalau remote tidak dipakai atau gagal
+            for _ = 1, PICKUP_CLICKS do
+                if not drop.item.Parent then
+                    break
+                end
+                if not clickDrop(drop.part) then
+                    break -- item tidak terlihat di layar
+                end
+                if not waitFor(0.2) then return false end
+            end
+
+            if not drop.item.Parent then
+                picked += 1
+            else
+                givenUpDrops[drop.item] = true -- gagal diambil, jangan ditunggu terus
+            end
+        end
+        return true
+    end
+
+    -- Cari drop prioritas terdekat di seluruh WorldItems (tanpa batas radius)
+    findPriorityDrop = function(fromPosition)
+        local folder = workspace:FindFirstChild("WorldItems")
+        if not folder then
+            return nil
+        end
+        local best, bestDistance = nil, math.huge
+        for _, item in ipairs(folder:GetChildren()) do
+            local part = item:IsA("Model") and item.PrimaryPart or (item:IsA("BasePart") and item)
+            local isPriority = false
+            if part then
+                local lowerName = part.Name:lower()
+                for _, keyword in ipairs(PRIORITY_DROP_PARTS) do
+                    if lowerName:find(keyword:lower(), 1, true) then
+                        isPriority = true
+                        break
+                    end
+                end
+            end
+            if isPriority and not givenUpDrops[item] then
+                local distance = (part.Position - fromPosition).Magnitude
+                if distance < bestDistance then
+                    best, bestDistance = { item = item, part = part }, distance
+                end
+            end
+        end
+        return best
+    end
+
+    local function mineOnce()
+        -- 1. Scan
+        local results = scanOres()
+        if not results then
+            stopMiner("Folder Spawn_Ore tidak ditemukan")
+            return
+        end
+
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then
+            setStatus("Menunggu karakter...")
+            waitFor(1)
+            return
+        end
+
+        -- 0. Drop prioritas di WorldItems? Teleport ke sana dan tunggu sampai hilang.
+        local priority = findPriorityDrop(rootPart.Position)
+        if priority then
+            markTarget(nil)
+            setStatus("Drop prioritas! Ke " .. priority.part.Name)
+            approachDrop(priority.part)
+            local deadline = os.clock() + PRIORITY_WAIT_MAX
+            while priority.item.Parent do
+                if os.clock() >= deadline then
+                    givenUpDrops[priority.item] = true -- tidak hilang-hilang: lepaskan
+                    break
+                end
+                toggleButton.Text = string.format("OFF | tunggu drop prioritas (%d)",
+                    math.ceil(deadline - os.clock()))
+                toggleButton.BackgroundColor3 = Color3.fromRGB(170, 140, 20)
+                -- Coba ambil sekalian (kalau pengambilan drop aktif)
+                if PICKUP_ENABLED and PICKUP_USE_REMOTE then
+                    requestPickup(priority.item)
+                end
+                if not waitFor(1) then
+                    return
+                end
+            end
+            if not priority.item.Parent then
+                picked += 1
+            end
+            toggleButton.Text = "STOP"
+            toggleButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+            return -- putaran berikutnya: cek prioritas lagi, lalu lanjut ore
+        end
+
+        local target = pickNearestOre(results, rootPart.Position)
+        if not target then
+            setStatus(string.format("Tidak ada ore kosong (%d total). Scan ulang...", #results))
+            waitFor(EMPTY_WAIT)
+            return
+        end
+
+        -- Cek terakhir tepat sebelum teleport, kalau-kalau ada pemain baru datang
+        local blocker = getNearbyPlayer(target.position)
+        if blocker then
+            setStatus(target.name .. " ada " .. blocker.Name .. ", cari SP lain")
+            waitFor(0.2)
+            return
+        end
+
+        -- 2. Teleport ke ore
+        markTarget(target)
+        currentTarget = target
+        setStatus("Ke " .. target.name .. " (" .. target.oreType .. ")")
+        if lookUpEnabled then
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.Anchored = false -- lepas dulu supaya bisa dipindah
+            end
+        end
+        teleportTo(target.position, settings.height)
+        applyLookUp()
+        if not waitFor(0.3) then return end -- beri waktu karakter mendarat
+
+        -- 3. Klik di X,Y sampai ore habis atau jumlah klik tercapai
+        for i = 1, settings.clicks do
+            if not target.ore.Parent then
+                break -- ore sudah hilang, berarti tertambang
+            end
+            setStatus(string.format("Mining %s (%s) | F %d/%d | total %d", target.name, target.oreType, i, settings.clicks, mined))
+            -- Tekan F (bukan klik mouse di X,Y)
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            task.wait(HOLD_TIME)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+            if not waitFor(CLICK_GAP) then return end
+        end
+
+        -- 4. OFF: tunggu sampai ore hilang, tanpa batas waktu. Ore hilang = ON lagi.
+        inCooldown = true
+        toggleButton.Text = "OFF | tunggu ore hilang"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(170, 110, 20)
+
+        -- Batas waktu diambil dari kolom "Timeout ore hilang" (bisa diubah saat jalan)
+        local oreTimeout = TYPE_TIMEOUTS[target.oreType] or settings.waitTime
+        local oreDeadline = os.clock() + oreTimeout
+        while target.ore.Parent do
+            local left = oreDeadline - os.clock()
+            if left <= 0 then
+                -- Ore tidak hilang dalam batas waktu: lewati sementara, lalu ON lagi
+                skipped[target.ore] = os.clock() + SKIP_TIME
+                setStatus(string.format("%s tidak hilang dalam %.0f dtk, lanjut", target.name, oreTimeout))
+                inCooldown = false
+                if not loadSettings() then
+                    stopMiner("Input tidak valid, cek kolom")
+                    return
+                end
+                toggleButton.Text = "STOP"
+                toggleButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+                return
+            end
+            toggleButton.Text = string.format("OFF | tunggu ore hilang (%d)", math.ceil(left))
+            setStatus(string.format("%s (%s) | tunggu hilang | ore %d", target.name, target.oreType, mined))
+            if not waitFor(0.2) then
+                inCooldown = false
+                return
+            end
+        end
+        mined += 1
+
+        -- Ore sudah hilang: tunggu 2 detik dulu sebelum lanjut
+        toggleButton.Text = "OFF | ore hilang, tunggu 2 dtk"
+        if not waitFor(ORE_GONE_WAIT) then
+            inCooldown = false
+            return
+        end
+
+        -- 5. Tunggu drop hilang. Drop bisa muncul sedikit telat setelah ore hancur,
+        --    jadi beri jeda singkat (DROP_GRACE) sebelum memutuskan "tidak ada drop".
+        -- Drop dianggap benar-benar habis kalau tidak ada drop selama DROP_CLEAR_WAIT detik berturut-turut
+        local emptySince = nil
+        while true do
+            local drops = findDrops(target.position)
+
+            if #drops > 0 then
+                emptySince = nil
+                if PICKUP_ENABLED then
+                    toggleButton.Text = string.format("OFF | ambil %d drop", #drops)
+                    if not collectDrops(target.position) then
+                        inCooldown = false
+                        return
+                    end
+                else
+                    toggleButton.Text = string.format("OFF | tunggu %d drop hilang", #drops)
+                end
+            else
+                emptySince = emptySince or os.clock()
+                local left = DROP_CLEAR_WAIT - (os.clock() - emptySince)
+                if left <= 0 then
+                    break -- drop sudah habis selama 2 detik: ON lagi
+                end
+                toggleButton.Text = string.format("OFF | drop habis, cek %.1f dtk", left)
+            end
+
+            setStatus(string.format("%s (%s) | ore %d", target.name, target.oreType, mined))
+            if not waitFor(0.2) then
+                inCooldown = false
+                return
+            end
+        end
+        inCooldown = false
+
+        -- ON lagi: baca ulang kolom, siapa tahu diedit selama OFF
+        if not loadSettings() then
+            stopMiner("Input tidak valid, cek kolom")
+            return
+        end
+        toggleButton.Text = "STOP"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+    end
+
+    -- ==========================================================
+    -- VISUAL RADIUS (bola transparan mengikuti karakter-mu)
+    -- ==========================================================
+    local radiusBall = nil
+    if SHOW_RADIUS and PLAYER_RADIUS > 0 then
+        radiusBall = Instance.new("Part")
+        radiusBall.Name = "AutoMinerRadius"
+        radiusBall.Shape = Enum.PartType.Ball
+        radiusBall.Size = Vector3.new(PLAYER_RADIUS * 2, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2) -- diameter = 2x radius
+        radiusBall.Material = Enum.Material.ForceField
+        radiusBall.Color = Color3.fromRGB(80, 170, 255)
+        radiusBall.Transparency = 0.3
+        radiusBall.Anchored = true
+        radiusBall.CanCollide = false
+        radiusBall.CanQuery = false
+        radiusBall.CanTouch = false
+        radiusBall.CastShadow = false
+        radiusBall.Parent = workspace
+
+        table.insert(connections, RunService.RenderStepped:Connect(function()
+            local character = player.Character
+            local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                radiusBall.CFrame = CFrame.new(rootPart.Position)
+            end
+        end))
+    end
+
+    -- ==========================================================
+    -- OVERLAY: PEMAIN LAIN DI SEKITAR
+    -- ==========================================================
+    local playerMarks = {} -- [player] = { highlight, billboard, label }
+
+    local function removeMark(other)
+        local mark = playerMarks[other]
+        if mark then
+            mark.highlight:Destroy()
+            mark.billboard:Destroy()
+            playerMarks[other] = nil
+        end
+    end
+
+    local function getMark(other, character)
+        local mark = playerMarks[other]
+        if mark and mark.character == character then
+            return mark
+        end
+        removeMark(other)
+
+        local highlight = Instance.new("Highlight")
+        highlight.FillColor = Color3.fromRGB(255, 60, 60)
+        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        highlight.FillTransparency = 0.6
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Adornee = character
+        highlight.Parent = gui
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Size = UDim2.new(0, 160, 0, 36)
+        billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Adornee = character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        billboard.Parent = gui
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 120, 120)
+        label.TextStrokeTransparency = 0.3
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 14
+        label.Parent = billboard
+
+        mark = { character = character, highlight = highlight, billboard = billboard, label = label }
+        playerMarks[other] = mark
+        return mark
+    end
+
+    local function updatePlayerMarks()
+        local myCharacter = player.Character
+        local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player then
+                local character = other.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                local distance = (myRoot and root) and (root.Position - myRoot.Position).Magnitude or math.huge
+
+                if SHOW_PLAYERS and root and distance <= PLAYER_RADIUS then
+                    local mark = getMark(other, character)
+                    mark.label.Text = string.format("%s\n%.0f stud", other.Name, distance)
+                else
+                    removeMark(other)
+                end
+            end
+        end
+
+        -- Bersihkan tanda pemain yang sudah keluar dari server
+        for other in pairs(playerMarks) do
+            if other.Parent ~= Players then
+                removeMark(other)
+            end
+        end
+    end
+
+    task.spawn(function()
+        while isAlive do
+            pcall(updatePlayerMarks)
+            task.wait(0.3)
+        end
+    end)
+
+    -- ==========================================================
+    -- KAMERA: BOLEH ZOOM LEBIH JAUH
+    -- ==========================================================
+    local originalMaxZoom = player.CameraMaxZoomDistance
+
+    if CAMERA_MAX_ZOOM then
+        -- Dipasang terus, karena sebagian game mengembalikan batas zoom-nya
+        task.spawn(function()
+            while isAlive do
+                if player.CameraMaxZoomDistance < CAMERA_MAX_ZOOM then
+                    player.CameraMaxZoomDistance = CAMERA_MAX_ZOOM
+                end
+                task.wait(0.5)
+            end
+        end)
+    end
+
+    -- ==========================================================
+    -- MEMATIKAN SCRIPT
+    -- ==========================================================
+    local function stopScript()
+        isActive = false
+        isAlive = false
+        if lookUpEnabled then
+            pcall(releaseLookUp)
+        end
+        for other in pairs(playerMarks) do
+            removeMark(other)
+        end
+        pcall(function()
+            player.CameraMaxZoomDistance = originalMaxZoom
+        end)
+        if radiusBall then
+            radiusBall:Destroy()
+        end
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+        _G.StopAutoMiner = nil
+    end
+
+    _G.StopAutoMiner = stopScript
+
+    -- ==========================================================
+    -- CARI POSISI MOUSE / TOUCH
+    -- ==========================================================
+    local lastX, lastY = nil, nil
+
+    local function isInsidePanel(position)
+        local panelPosition = frame.AbsolutePosition
+        local panelSize = frame.AbsoluteSize
+        return position.X >= panelPosition.X
+            and position.X <= panelPosition.X + panelSize.X
+            and position.Y >= panelPosition.Y
+            and position.Y <= panelPosition.Y + panelSize.Y
+    end
+
+    table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+        if isMobileMode or input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+        local position = UserInputService:GetMouseLocation()
+        lastX, lastY = math.floor(position.X), math.floor(position.Y)
+        positionLabel.Text = string.format("Mouse X: %d | Y: %d", lastX, lastY)
+    end))
+
+    local function updateTouch(touch)
+        if not isMobileMode or isInsidePanel(touch.Position) then
+            return
+        end
+        local inset = GuiService:GetGuiInset()
+        lastX = math.floor(touch.Position.X + inset.X)
+        lastY = math.floor(touch.Position.Y + inset.Y)
+        positionLabel.Text = string.format("Touch X: %d | Y: %d", lastX, lastY)
+    end
+
+    table.insert(connections, UserInputService.TouchStarted:Connect(updateTouch))
+    table.insert(connections, UserInputService.TouchMoved:Connect(updateTouch))
+
+    -- ==========================================================
+    -- TOMBOL DAN SHORTCUT
+    -- ==========================================================
+    table.insert(connections, toggleButton.Activated:Connect(toggleMiner))
+    table.insert(connections, exitButton.Activated:Connect(stopScript))
+
+    -- MARK: masukkan SP yang sedang dituju ke kolom Skip, cetak posisinya, salin daftarnya
+    local function markCurrent()
+        if not currentTarget then
+            setStatus("Belum ada target untuk di-mark")
+            return
+        end
+
+        local name = currentTarget.name
+        local list = readIgnoreList()
+        if not table.find(list, name) then
+            table.insert(list, name)
+            local position = currentTarget.position
+            print(string.format("[MARK] %s = %s, %s, %s", name,
+                tostring(position.X), tostring(position.Y), tostring(position.Z)))
+        end
+        inputIgnore.Text = table.concat(list, ", ")
+
+        local copyFunction = setclipboard or toclipboard
+        if copyFunction and pcall(copyFunction, inputIgnore.Text) then
+            setStatus(name .. " di-skip, daftar tersalin")
+        else
+            setStatus(name .. " di-skip (lihat console)")
+        end
+    end
+
+    table.insert(connections, markButton.Activated:Connect(markCurrent))
+    table.insert(connections, pickButton.Activated:Connect(function()
+        if lastX and lastY then
+            inputX.Text = tostring(lastX)
+            inputY.Text = tostring(lastY)
+        end
+    end))
+    table.insert(connections, modeButton.Activated:Connect(function()
+        if isActive then
+            stopMiner("Mode diganti")
+        end
+        isMobileMode = not isMobileMode
+        lastX, lastY = nil, nil
+        applyMode()
+    end))
+
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then
+            return
+        end
+
+        -- 0 dan P hanya berlaku saat tab MINER yang terbuka. X (mark) selalu berlaku.
+        if input.KeyCode == Enum.KeyCode.Zero and currentTab == "miner" then
+            toggleMiner()
+        elseif input.KeyCode == Enum.KeyCode.P and currentTab == "miner" then
+            local position = UserInputService:GetMouseLocation()
+            inputX.Text = tostring(math.floor(position.X))
+            inputY.Text = tostring(math.floor(position.Y))
+        elseif input.KeyCode == Enum.KeyCode.X then
+            markCurrent()
+        end
+    end))
+
+    -- ==========================================================
+    -- LOOP UTAMA
+    -- ==========================================================
+    task.spawn(function()
+        while isAlive do
+            if isActive then
+                local success, err = pcall(mineOnce)
+                if not success then
+                    warn("Auto Miner error: " .. tostring(err))
+                    waitFor(1)
+                end
+            else
+                task.wait(0.1)
+            end
+        end
+    end)
+end
+
+-- ==========================================================
+-- TAMPILKAN DROPPED ITEM (workspace > WorldItems)
+-- ==========================================================
+do
+    local SHOW_DROPS = true   -- false = matikan tanda drop
+    local DROP_RADIUS = 100   -- tampilkan drop sejauh ini dari karakter (stud)
+    local MAX_DROP_MARKS = 15 -- batas jumlah tanda sekaligus (yang terdekat), supaya ringan
+    local DROP_TEXT_SIZE = 22 -- ukuran tulisan nama item
+
+    -- Drop yang TIDAK ditampilkan (cukup sebagian nama, tidak peduli huruf besar/kecil).
+    -- Dicek dari nama item, nama PrimaryPart, dan nama bagian di dalamnya (misal Mesh > Tria_Coin).
+    local HIDDEN_DROPS = { "Tria_Coin" }
+
+    local function isHiddenDrop(item, part)
+        local names = { item.Name:lower(), part and part.Name:lower() or "" }
+        for _, keyword in ipairs(HIDDEN_DROPS) do
+            local lowerKeyword = keyword:lower()
+            for _, name in ipairs(names) do
+                if name:find(lowerKeyword, 1, true) then
+                    return true
+                end
+            end
+            if item:FindFirstChild(keyword, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Warna khusus per item (dicocokkan dari nama, tidak peduli huruf besar/kecil).
+    -- Item yang tidak ada di daftar ini memakai hijau.
+    local DROP_COLORS = {
+        RustyGear = Color3.fromRGB(0, 230, 255),    -- biru cyan
+        ScrapMetal = Color3.fromRGB(255, 255, 255), -- putih
+    }
+    local DEFAULT_DROP_COLOR = Color3.fromRGB(80, 255, 120) -- hijau
+
+    local function getDropColor(displayName, item)
+        local check = (displayName .. " " .. item.Name):lower()
+        for name, color in pairs(DROP_COLORS) do
+            if check:find(name:lower(), 1, true) then
+                return color
+            end
+        end
+        return DEFAULT_DROP_COLOR
+    end
+
+    local dropMarks = {} -- [item] = { highlight, billboard, label }
+
+    -- Nama yang ditampilkan: attribute nama item kalau ada, kalau tidak nama PrimaryPart
+    local function getDisplayName(item)
+        local attributeName = item:GetAttribute("ItemName") or item:GetAttribute("Name")
+        if type(attributeName) == "string" then
+            return attributeName
+        end
+        local part = item:IsA("Model") and item.PrimaryPart
+        local name = part and part.Name or item.Name
+        return (name:gsub("^Mat_", ""):gsub("Mesh$", ""))
+    end
+
+    local function getItemPart(item)
+        if item:IsA("Model") then
+            return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart", true)
+        end
+        return item:IsA("BasePart") and item or nil
+    end
+
+    local function removeDropMark(item)
+        local mark = dropMarks[item]
+        if mark then
+            mark.highlight:Destroy()
+            mark.billboard:Destroy()
+            dropMarks[item] = nil
+        end
+    end
+
+    local function getDropMark(item, part)
+        if dropMarks[item] then
+            return dropMarks[item]
+        end
+        local highlight = Instance.new("Highlight")
+        highlight.FillColor = Color3.fromRGB(80, 255, 120)
+        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        highlight.FillTransparency = 0.5
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Adornee = item
+        highlight.Parent = gui
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Size = UDim2.new(0, 220, 0, 36)
+        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Adornee = part
+        billboard.Parent = gui
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(150, 255, 170)
+        label.TextStrokeTransparency = 0 -- garis hitam tebal supaya mudah dibaca
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = DROP_TEXT_SIZE
+        label.Parent = billboard
+
+        dropMarks[item] = { highlight = highlight, billboard = billboard, label = label }
+        return dropMarks[item]
+    end
+
+    if SHOW_DROPS then
+        task.spawn(function()
+            while isAlive do
+                pcall(function()
+                    local folder = workspace:FindFirstChild("WorldItems")
+                    local _, rootPart = getRoot()
+                    local keep = {}
+
+                    if folder and rootPart then
+                        -- Kumpulkan drop dalam radius, urut dari yang terdekat
+                        local found = {}
+                        for _, item in ipairs(folder:GetChildren()) do
+                            local part = getItemPart(item)
+                            if part and not isHiddenDrop(item, part) then
+                                local distance = (part.Position - rootPart.Position).Magnitude
+                                if distance <= DROP_RADIUS then
+                                    table.insert(found, { item = item, part = part, distance = distance })
+                                end
+                            end
+                        end
+                        table.sort(found, function(a, b)
+                            return a.distance < b.distance
+                        end)
+
+                        for index, entry in ipairs(found) do
+                            if index > MAX_DROP_MARKS then
+                                break
+                            end
+                            keep[entry.item] = true
+                            local mark = getDropMark(entry.item, entry.part)
+                            local displayName = getDisplayName(entry.item)
+                            local color = getDropColor(displayName, entry.item)
+                            mark.highlight.FillColor = color
+                            mark.label.TextColor3 = color
+                            mark.label.Text = displayName -- cukup nama, tanpa jarak
+                        end
+                    end
+
+                    for item in pairs(dropMarks) do
+                        if not keep[item] or not item.Parent then
+                            removeDropMark(item)
+                        end
+                    end
+                end)
+                task.wait(0.5)
+            end
+            for item in pairs(dropMarks) do
+                removeDropMark(item)
+            end
+        end)
+    end
+end
+
+-- ==========================================================
+-- JENDELA TERPISAH: GOLD STATUS (bagian dari toolkit, tapi panelnya sendiri)
+-- ==========================================================
+-- Tombol "–" di jendela ini = sembunyikan. Tombol G = tampilkan/sembunyikan lagi.
+-- Ikut tertutup saat toolkit dimatikan (tombol X panel utama atau End).
+do
+    local statusFrame = Instance.new("Frame")
+    statusFrame.Size = UDim2.new(0, 200, 0, 560)
+    statusFrame.Position = UDim2.new(1, -230, 0, 100) -- di kanan layar, supaya tidak menutupi toolkit
+    statusFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    statusFrame.BorderSizePixel = 0
+    statusFrame.Parent = gui -- ScreenGui milik toolkit, jadi ikut tertutup saat toolkit dimatikan
+    Instance.new("UICorner", statusFrame).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIDragDetector", statusFrame)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -40, 0, 28)
+    title.Position = UDim2.new(0, 12, 0, 2)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Text = "GOLD STATUS"
+    title.Parent = statusFrame
+
+    local statusCloseButton = Instance.new("TextButton")
+    statusCloseButton.Size = UDim2.new(0, 20, 0, 20)
+    statusCloseButton.Position = UDim2.new(1, -25, 0, 6)
+    statusCloseButton.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+    statusCloseButton.BorderSizePixel = 0
+    statusCloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statusCloseButton.Font = Enum.Font.SourceSansBold
+    statusCloseButton.TextSize = 12
+    statusCloseButton.Text = "–"
+    statusCloseButton.Parent = statusFrame
+    Instance.new("UICorner", statusCloseButton).CornerRadius = UDim.new(0, 4)
+
+    -- Isi panel ditaruh di bawah judul
+    local statusPage = Instance.new("Frame")
+    statusPage.Size = UDim2.new(1, 0, 1, -32)
+    statusPage.Position = UDim2.new(0, 0, 0, 32)
+    statusPage.BackgroundTransparency = 1
+    statusPage.Parent = statusFrame
+
+    -- ==========================================================
+    -- PENGATURAN
+    -- ==========================================================
+    -- Item yang dihitung (cukup sebagian nama, tidak peduli huruf besar/kecil)
+    local STATUS_KEYWORDS = { "GoldVeinedQuartz" }
+    local MAX_ROWS = 8 -- jumlah item terdekat yang ditampilkan di daftar
+
+    local function makeLabel(yPos, height, text, size, color)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0, 170, 0, height)
+        label.Position = UDim2.new(0, 15, 0, yPos)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = size or 14
+        label.TextWrapped = true
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = text
+        label.Parent = statusPage
+        return label
+    end
+
+    local countLabel = makeLabel(0, 44, "Menghitung...", 16, Color3.fromRGB(255, 215, 90))
+    local nearestLabel = makeLabel(44, 20, "", 13, Color3.fromRGB(190, 190, 190))
+
+    local list = Instance.new("ScrollingFrame")
+    list.Size = UDim2.new(0, 170, 0, 200)
+    list.Position = UDim2.new(0, 15, 0, 68)
+    list.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = 5
+    list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    list.CanvasSize = UDim2.new(0, 0, 0, 0)
+    list.Parent = statusPage
+    Instance.new("UICorner", list).CornerRadius = UDim.new(0, 6)
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 3)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = list
+
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop = UDim.new(0, 3)
+    padding.PaddingLeft = UDim.new(0, 3)
+    padding.PaddingRight = UDim.new(0, 8)
+    padding.Parent = list
+
+    -- Baris daftar dibuat sekali lalu dipakai ulang (hemat memori)
+    local rows = {}
+    for i = 1, MAX_ROWS do
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 26)
+        row.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        row.BorderSizePixel = 0
+        row.LayoutOrder = i
+        row.Visible = false
+        row.Parent = list
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+        local text = Instance.new("TextLabel")
+        text.Size = UDim2.new(1, -44, 1, 0)
+        text.Position = UDim2.new(0, 6, 0, 0)
+        text.BackgroundTransparency = 1
+        text.TextColor3 = Color3.fromRGB(255, 220, 110)
+        text.Font = Enum.Font.SourceSans
+        text.TextSize = 12
+        text.TextXAlignment = Enum.TextXAlignment.Left
+        text.TextTruncate = Enum.TextTruncate.AtEnd
+        text.Parent = row
+
+        local tpButton = Instance.new("TextButton")
+        tpButton.Size = UDim2.new(0, 34, 0, 20)
+        tpButton.Position = UDim2.new(1, -36, 0, 3)
+        tpButton.BackgroundColor3 = Color3.fromRGB(60, 80, 130)
+        tpButton.BorderSizePixel = 0
+        tpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        tpButton.Font = Enum.Font.SourceSansBold
+        tpButton.TextSize = 11
+        tpButton.Text = "TP"
+        tpButton.Parent = row
+        Instance.new("UICorner", tpButton).CornerRadius = UDim.new(0, 4)
+
+        rows[i] = { frame = row, text = text, button = tpButton, position = nil }
+        table.insert(connections, tpButton.Activated:Connect(function()
+            if rows[i].position then
+                teleportTo(rows[i].position)
+            end
+        end))
+    end
+
+    local function matchKeyword(name)
+        local lower = name:lower()
+        for _, keyword in ipairs(STATUS_KEYWORDS) do
+            if lower:find(keyword:lower(), 1, true) then
+                return keyword
+            end
+        end
+        return nil
+    end
+
+    task.spawn(function()
+        while isAlive do
+            pcall(function()
+                local folder = workspace:FindFirstChild("WorldItems")
+                local _, rootPart = getRoot()
+                local counts = {}
+                local found = {}
+
+                if folder then
+                    for _, item in ipairs(folder:GetChildren()) do
+                        local part = item:IsA("Model") and (item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart", true))
+                            or (item:IsA("BasePart") and item)
+                        -- Cocokkan dari nama PrimaryPart atau nama item itu sendiri
+                        local keyword = matchKeyword((part and part.Name or "") .. " " .. item.Name)
+                        if keyword then
+                            counts[keyword] = (counts[keyword] or 0) + 1
+                            if part then
+                                local distance = rootPart and (part.Position - rootPart.Position).Magnitude or 0
+                                table.insert(found, { keyword = keyword, position = part.Position, distance = distance })
+                            end
+                        end
+                    end
+                end
+
+                -- Ringkasan jumlah per item
+                local lines = {}
+                for _, keyword in ipairs(STATUS_KEYWORDS) do
+                    table.insert(lines, string.format("%s: %d", keyword, counts[keyword] or 0))
+                end
+                countLabel.Text = folder and table.concat(lines, "\n") or "Folder WorldItems tidak ditemukan"
+
+                table.sort(found, function(a, b)
+                    return a.distance < b.distance
+                end)
+                nearestLabel.Text = found[1] and string.format("Terdekat: %.0f stud", found[1].distance) or "Tidak ada di world"
+
+                -- Daftar item terdekat + tombol TP
+                for i = 1, MAX_ROWS do
+                    local entry = found[i]
+                    rows[i].frame.Visible = entry ~= nil
+                    rows[i].position = entry and entry.position or nil
+                    if entry then
+                        rows[i].text.Text = string.format("%s | %.0f stud", entry.keyword, entry.distance)
+                    end
+                end
+            end)
+            task.wait(1)
+        end
+    end)
+
+
+    -- ==========================================================
+    -- RIWAYAT DROP GOLD: kapan muncul, dari SP mana, dan apakah diambil / despawn
+    -- ==========================================================
+    local HISTORY_SIZE = 15   -- jumlah riwayat yang disimpan & ditampilkan
+    local PICKED_RANGE = 15   -- kalau hilang saat kita sedekat ini, dianggap diambil kita
+
+    local historyTitle = makeLabel(274, 18, "Riwayat drop gold:", 13, Color3.fromRGB(255, 215, 90))
+
+    local historyList = Instance.new("ScrollingFrame")
+    historyList.Size = UDim2.new(0, 170, 0, 220)
+    historyList.Position = UDim2.new(0, 15, 0, 294)
+    historyList.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    historyList.BorderSizePixel = 0
+    historyList.ScrollBarThickness = 5
+    historyList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    historyList.CanvasSize = UDim2.new(0, 0, 0, 0)
+    historyList.Parent = statusPage
+    Instance.new("UICorner", historyList).CornerRadius = UDim.new(0, 6)
+
+    local historyLayout = Instance.new("UIListLayout")
+    historyLayout.Padding = UDim.new(0, 2)
+    historyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    historyLayout.Parent = historyList
+
+    -- Baris riwayat dibuat sekali, lalu teksnya saja yang diganti (hemat memori)
+    local historyRows = {}
+    for i = 1, HISTORY_SIZE do
+        local row = Instance.new("TextLabel")
+        row.Size = UDim2.new(1, -8, 0, 30)
+        row.BackgroundTransparency = 1
+        row.TextColor3 = Color3.fromRGB(220, 220, 220)
+        row.Font = Enum.Font.SourceSans
+        row.TextSize = 12
+        row.TextWrapped = true
+        row.TextXAlignment = Enum.TextXAlignment.Left
+        row.TextYAlignment = Enum.TextYAlignment.Top
+        row.LayoutOrder = i
+        row.Visible = false
+        row.Parent = historyList
+        historyRows[i] = row
+    end
+
+    local history = {}          -- terbaru di depan: { time, sp, born, status, endTime }
+    local entryByItem = {}      -- [item] = entri riwayat (hanya untuk item yang masih ada)
+
+    -- Posisi semua SP (dicache, diperbarui tiap 60 detik)
+    local spCache, spCacheTime = {}, 0
+    local function getSpPositions()
+        if os.clock() - spCacheTime < 60 and next(spCache) then
+            return spCache
+        end
+        spCache, spCacheTime = {}, os.clock()
+        local spawnFolder = workspace:FindFirstChild("Maps")
+            and workspace.Maps:FindFirstChild("World")
+            and workspace.Maps.World:FindFirstChild("Spawn_Ore")
+        if spawnFolder then
+            for _, sp in ipairs(spawnFolder:GetChildren()) do
+                local part = sp:IsA("BasePart") and sp or sp:FindFirstChildWhichIsA("BasePart", true)
+                if part then
+                    spCache[sp.Name] = part.Position
+                end
+            end
+        end
+        return spCache
+    end
+
+    local function nearestSp(position)
+        local bestName, bestDistance = "?", math.huge
+        for name, spPosition in pairs(getSpPositions()) do
+            local distance = (spPosition - position).Magnitude
+            if distance < bestDistance then
+                bestName, bestDistance = name, distance
+            end
+        end
+        return bestName, bestDistance
+    end
+
+    local function refreshHistory()
+        for i = 1, HISTORY_SIZE do
+            local entry = history[i]
+            historyRows[i].Visible = entry ~= nil
+            if entry then
+                local status, color
+                if entry.status == "ada" then
+                    status = string.format("MASIH ADA (%ds)", math.floor(os.clock() - entry.born))
+                    color = Color3.fromRGB(255, 215, 90)
+                elseif entry.status == "diambil" then
+                    status = string.format("diambil kamu (%ds)", entry.lifetime)
+                    color = Color3.fromRGB(150, 255, 170)
+                else
+                    status = string.format("HILANG/despawn (%ds)", entry.lifetime)
+                    color = Color3.fromRGB(255, 120, 120)
+                end
+                historyRows[i].Text = string.format("%s | %s\n%s", entry.time, entry.sp, status)
+                historyRows[i].TextColor3 = color
+            end
+        end
+    end
+
+    local function isGold(item)
+        local part = item:IsA("Model") and (item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart", true))
+            or (item:IsA("BasePart") and item)
+        return matchKeyword((part and part.Name or "") .. " " .. item.Name) ~= nil, part
+    end
+
+    local function onItemAdded(item)
+        task.wait(0.1) -- tunggu PrimaryPart sempat termuat
+        local gold, part = isGold(item)
+        if not gold or not part then
+            return
+        end
+        local spName, spDistance = nearestSp(part.Position)
+        local entry = {
+            time = os.date("%H:%M:%S"),
+            sp = string.format("%s (%.0f stud)", spName, spDistance),
+            born = os.clock(),
+            status = "ada",
+            lastPosition = part.Position,
+        }
+        entryByItem[item] = entry
+        table.insert(history, 1, entry)
+        if #history > HISTORY_SIZE then
+            table.remove(history) -- buang yang paling lama
+        end
+        print(string.format("[GOLD] %s muncul dekat %s", entry.time, entry.sp))
+        refreshHistory()
+    end
+
+    local function onItemRemoved(item)
+        local entry = entryByItem[item]
+        if not entry then
+            return
+        end
+        entryByItem[item] = nil
+        entry.lifetime = math.floor(os.clock() - entry.born)
+
+        -- Dianggap diambil kita kalau karakter dekat saat item hilang
+        local _, rootPart = getRoot()
+        local near = rootPart and (rootPart.Position - entry.lastPosition).Magnitude <= PICKED_RANGE
+        entry.status = near and "diambil" or "hilang"
+        if not near then
+            print(string.format("[GOLD] %s dekat %s HILANG setelah %ds (bukan diambil kamu)",
+                entry.time, entry.sp, entry.lifetime))
+        end
+        refreshHistory()
+    end
+
+    -- Pantau WorldItems: catat setiap gold yang muncul & hilang
+    task.spawn(function()
+        local folder = workspace:WaitForChild("WorldItems", 30)
+        if not folder or not isAlive then
+            return
+        end
+        for _, item in ipairs(folder:GetChildren()) do
+            task.spawn(onItemAdded, item) -- gold yang sudah ada saat toolkit dijalankan
+        end
+        table.insert(connections, folder.ChildAdded:Connect(function(item)
+            task.spawn(onItemAdded, item)
+        end))
+        table.insert(connections, folder.ChildRemoved:Connect(onItemRemoved))
+    end)
+
+    -- Perbarui umur "MASIH ADA" tiap 2 detik
+    task.spawn(function()
+        while isAlive do
+            if statusFrame.Visible and history[1] then
+                refreshHistory()
+            end
+            task.wait(2)
+        end
+    end)
+
+    table.insert(connections, statusCloseButton.Activated:Connect(function()
+        statusFrame.Visible = false
+    end))
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.G then
+            statusFrame.Visible = not statusFrame.Visible
+        end
+    end))
+end
+
+-- ==========================================================
+-- LOOP UTAMA
+-- ==========================================================
+task.spawn(function()
+    while isAlive do
+        if isActive then
+            runClicks()
+        else
+            task.wait(0.1)
+        end
+    end
+end)-- Toolkit: Auto Miner + Simple Clicker + Teleport
+-- Tab MINER   : auto miner (scan ore > teleport > klik > tunggu ore & drop hilang > ulang)
+-- Tab CLICKER : [jumlah] klik setiap [delay] detik, berulang sampai di-STOP.
+-- Tab TELEPORT: simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
+-- Contoh: jumlah 5, delay 3 = klik 5x, tunggu 3 detik, klik 5x lagi, dst.
+-- 0 = start/stop tab yang sedang terbuka | P = ambil posisi mouse | X = mark SP (miner)
+-- G = jendela Gold Status | Tombol X di panel atau End = matikan semuanya
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+
+local HOLD_TIME = 0.05   -- lama klik ditahan (50 ms)
+local CLICK_GAP = 0.1    -- jeda antar klik dalam satu putaran (100 ms)
+local MIN_DELAY = 0.1    -- delay paling kecil yang diizinkan
+local MAX_CLICKS = 1000  -- batas jumlah klik per putaran
+
+local player = Players.LocalPlayer
+local TP_HEIGHT = 3                            -- teleport sedikit di atas titik supaya tidak nyangkut
+local SAVE_FILE = "macro_teleport_points.json" -- sama dengan script macro, jadi lokasi tersimpan dipakai bersama
+
+-- Lokasi bawaan: selalu ada di daftar (ditambahkan otomatis kalau belum ada)
+local DEFAULT_POINTS = {
+    { name = "Farm to Village",   x = 278,  y = 10,  z = -28 },
+    { name = "Village to Goblin", x = 175,  y = -3,  z = 164 },
+    { name = "Goblin to Pohon",   x = 547,  y = 107, z = -911 },
+    { name = "Pohon to Village",  x = -761, y = 45,  z = -222 },
+}
+
+-- Matikan versi lama jika script dijalankan ulang
+if _G.StopSimpleClicker then
+    _G.StopSimpleClicker()
+end
+
+local isActive = false
+local isAlive = true
+local targetX, targetY, clickAmount, clickDelay = nil, nil, nil, nil
+local connections = {}
+
+-- ==========================================================
+-- MEMBUAT UI
+-- ==========================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "SimpleClickerUI"
+gui.ResetOnSpawn = false
+gui.Parent = CoreGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 200, 0, 422)
+frame.Position = UDim2.new(0, 30, 0, 100)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+Instance.new("UIDragDetector", frame)
+
+local HEADER = 32 -- tinggi baris tab di atas
+
+-- Tiga tab berdampingan, menyisakan tempat untuk tombol X di kanan
+local function createTab(index, text)
+    local tab = Instance.new("TextButton")
+    tab.Size = UDim2.new(0, 52, 0, 24)
+    tab.Position = UDim2.new(0, 6 + (index - 1) * 56, 0, 5)
+    tab.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    tab.BorderSizePixel = 0
+    tab.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tab.Font = Enum.Font.SourceSansBold
+    tab.TextSize = 12
+    tab.Text = text
+    tab.Parent = frame
+    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 5)
+    return tab
+end
+
+local minerTab = createTab(1, "MINER")
+local clickerTab = createTab(2, "CLICKER")
+local teleportTab = createTab(3, "TELEPORT")
+
+local function createPage()
+    local page = Instance.new("Frame")
+    page.Size = UDim2.new(1, 0, 1, -HEADER)
+    page.Position = UDim2.new(0, 0, 0, HEADER)
+    page.BackgroundTransparency = 1
+    page.Parent = frame
+    return page
+end
+
+local minerPage = createPage()
+local clickerPage = createPage()
+local teleportPage = createPage()
+local currentTab = "miner"
+local SHARED_GUI = gui -- dipakai halaman MINER
+
+-- Elemen dibuat di halaman ini (diganti ke teleportPage saat membuat tab teleport)
+local currentParent = clickerPage
+
+local function createLabel(yPos, height, text)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 160, 0, height)
+    label.Position = UDim2.new(0, 20, 0, yPos)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.Font = Enum.Font.SourceSansBold
+    label.TextSize = 14
+    label.Text = text
+    label.TextWrapped = true
+    label.Parent = currentParent
+    return label
+end
+
+local function createTextBox(yPos, placeholder, defaultText)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0, 160, 0, 26)
+    box.Position = UDim2.new(0, 20, 0, yPos)
+    box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    box.BorderSizePixel = 0
+    box.PlaceholderText = placeholder
+    box.Text = defaultText
+    box.ClearTextOnFocus = false
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSans
+    box.TextSize = 14
+    box.Parent = currentParent
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+    return box
+end
+
+local function createButton(yPos, height, text, color)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0, 160, 0, height)
+    button.Position = UDim2.new(0, 20, 0, yPos)
+    button.BackgroundColor3 = color
+    button.BorderSizePixel = 0
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.SourceSansBold
+    button.TextSize = 13
+    button.Text = text
+    button.Parent = currentParent
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+    return button
+end
+
+local positionLabel = createLabel(5, 25, "Mouse X: 0 | Y: 0")
+local inputX = createTextBox(32, "Target X", "400")
+local inputY = createTextBox(65, "Target Y", "300")
+local inputAmount = createTextBox(98, "Tekan F per putaran", "1")
+local inputDelay = createTextBox(131, "Setiap ... detik", "15")
+
+local modeButton = createButton(164, 26, "", Color3.fromRGB(80, 80, 80))
+local pickButton = createButton(197, 26, "AMBIL POSISI TOUCH", Color3.fromRGB(60, 80, 130))
+local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
+toggleButton.TextSize = 14
+
+local infoLabel = createLabel(264, 30, "Putaran: 0")
+infoLabel.Font = Enum.Font.SourceSans
+infoLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local exitButton = Instance.new("TextButton")
+exitButton.Size = UDim2.new(0, 20, 0, 20)
+exitButton.Position = UDim2.new(1, -25, 0, 7)
+exitButton.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+exitButton.BorderSizePixel = 0
+exitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+exitButton.Font = Enum.Font.SourceSansBold
+exitButton.TextSize = 12
+exitButton.Text = "X"
+exitButton.Parent = frame
+Instance.new("UICorner", exitButton).CornerRadius = UDim.new(0, 4)
+
+-- ==========================================================
+-- TAB TELEPORT: UI
+-- ==========================================================
+currentParent = teleportPage
+
+local currentPosLabel = createLabel(0, 22, "Posisi: -")
+currentPosLabel.Font = Enum.Font.Code
+currentPosLabel.TextSize = 12
+currentPosLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local inputName = createTextBox(24, "Nama lokasi (opsional)", "")
+local saveButton = createButton(54, 26, "SIMPAN POSISI SEKARANG", Color3.fromRGB(20, 120, 60))
+
+local inputCoords = createTextBox(86, "X, Y, Z  (tempel dari scanner)", "")
+local tpCoordsButton = createButton(116, 26, "TP KE KOORDINAT", Color3.fromRGB(60, 80, 130))
+
+local tpStatus = createLabel(144, 18, "")
+tpStatus.Font = Enum.Font.SourceSans
+tpStatus.TextSize = 12
+tpStatus.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+local listFrame = Instance.new("ScrollingFrame")
+listFrame.Size = UDim2.new(0, 170, 0, 160)
+listFrame.Position = UDim2.new(0, 15, 0, 164)
+listFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+listFrame.BorderSizePixel = 0
+listFrame.ScrollBarThickness = 5
+listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+listFrame.Parent = teleportPage
+Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 6)
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 3)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = listFrame
+
+local listPadding = Instance.new("UIPadding")
+listPadding.PaddingTop = UDim.new(0, 3)
+listPadding.PaddingLeft = UDim.new(0, 3)
+listPadding.PaddingRight = UDim.new(0, 8)
+listPadding.Parent = listFrame
+
+local PAGE_HEIGHTS = { miner = 420, clicker = 298, teleport = 332 }
+local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
+local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
+
+local function showTab(name)
+    currentTab = name
+    for tabName, page in pairs(pages) do
+        page.Visible = tabName == name
+        tabButtons[tabName].BackgroundColor3 = tabName == name and Color3.fromRGB(90, 90, 90)
+            or Color3.fromRGB(55, 55, 55)
+    end
+    frame.Size = UDim2.new(0, 200, 0, HEADER + PAGE_HEIGHTS[name])
+end
+
+showTab("miner")
+
+-- ==========================================================
+-- MODE PC / MOBILE
+-- ==========================================================
+local isMobileMode = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local function applyMode()
+    if isMobileMode then
+        modeButton.Text = "MODE: MOBILE"
+        pickButton.Text = "AMBIL POSISI TOUCH"
+        positionLabel.Text = "Touch X: - | Y: -"
+    else
+        modeButton.Text = "MODE: PC"
+        pickButton.Text = "AMBIL POSISI (P)"
+        positionLabel.Text = "Mouse X: 0 | Y: 0"
+    end
+end
+
+applyMode()
+
+-- ==========================================================
+-- STATUS DAN INPUT
+-- ==========================================================
+local function setStatus(text, color)
+    toggleButton.Text = text
+    toggleButton.BackgroundColor3 = color
+end
+
+local function stopClicker()
+    isActive = false
+    setStatus("START", Color3.fromRGB(20, 120, 60))
+end
+
+-- Membaca dan memeriksa isi kolom
+local function loadSettings()
+    local x = tonumber(inputX.Text)
+    local y = tonumber(inputY.Text)
+    local amount = tonumber(inputAmount.Text)
+    local delay = tonumber(inputDelay.Text)
+
+    if not x or not y or not amount or amount < 1 or not delay then
+        return false
+    end
+
+    targetX = x
+    targetY = y
+    clickAmount = math.clamp(math.floor(amount), 1, MAX_CLICKS)
+    clickDelay = math.max(delay, MIN_DELAY)
+
+    inputAmount.Text = tostring(clickAmount)
+    inputDelay.Text = tostring(clickDelay)
+    return true
+end
+
+local function startClicker()
+    if loadSettings() then
+        isActive = true
+        setStatus("STOP", Color3.fromRGB(120, 30, 30))
+    else
+        setStatus("INPUT TIDAK VALID", Color3.fromRGB(170, 110, 20))
+    end
+end
+
+local function toggleClicker()
+    if isActive then
+        stopClicker()
+    else
+        startClicker()
+    end
+end
+
+-- Berhenti saat kolom diklik agar input tidak bentrok
+for _, box in ipairs({ inputX, inputY, inputAmount, inputDelay }) do
+    table.insert(connections, box.Focused:Connect(stopClicker))
+end
+
+-- ==========================================================
+-- FUNGSI KLIK
+-- ==========================================================
+local function waitFor(seconds)
+    local elapsed = 0
+    while elapsed < seconds do
+        if not isActive or not isAlive then
+            return false
+        end
+        elapsed += task.wait()
+    end
+    return isActive and isAlive
+end
+
+local function tapOnce()
+    local success = pcall(function()
+        VirtualInputManager:SendTouchEvent(0, 0, targetX, targetY)
+        task.wait(HOLD_TIME)
+        VirtualInputManager:SendTouchEvent(0, 2, targetX, targetY)
+    end)
+
+    if not success then
+        stopClicker()
+        setStatus("TOUCH TIDAK DIDUKUNG", Color3.fromRGB(170, 110, 20))
+    end
+end
+
+-- Tab CLICKER: tekan F (bukan klik mouse di X,Y)
+local function clickOnce()
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+    task.wait(HOLD_TIME)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+end
+
+-- Loop: klik [jumlah] kali, tunggu [delay] detik, ulang terus sampai STOP
+local function runClicks()
+    local round = 0
+    while isActive and isAlive do
+        round += 1
+
+        -- Klik sebanyak jumlah
+        for i = 1, clickAmount do
+            if not isActive or not isAlive then
+                return
+            end
+            clickOnce()
+            infoLabel.Text = string.format("Putaran %d | F %d/%d", round, i, clickAmount)
+            if i < clickAmount and not waitFor(CLICK_GAP) then
+                return
+            end
+        end
+
+        -- Tunggu sampai putaran berikutnya, sambil menampilkan hitung mundur
+        local remaining = clickDelay
+        while remaining > 0 do
+            infoLabel.Text = string.format("Putaran %d | Lanjut %.1f dtk", round, remaining)
+            local step = math.min(0.1, remaining)
+            if not waitFor(step) then
+                return
+            end
+            remaining -= step
+        end
+    end
+end
+
+-- ==========================================================
+-- TAB TELEPORT: FUNGSI
+-- ==========================================================
+local savedPoints = {} -- daftar { name, x, y, z }
+
+local function getRoot()
+    local character = player.Character
+    return character, character and character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Teleport ke posisi, tetap menghadap arah yang sama
+local function teleportTo(position)
+    local character, rootPart = getRoot()
+    if not rootPart then
+        tpStatus.Text = "Karakter tidak ditemukan"
+        return false
+    end
+    local target = position + Vector3.new(0, TP_HEIGHT, 0)
+    local look = rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+    if look.Magnitude < 0.01 then
+        look = Vector3.new(0, 0, -1)
+    end
+    character:PivotTo(CFrame.lookAt(target, target + look.Unit))
+    rootPart.AssemblyLinearVelocity = Vector3.zero
+    return true
+end
+
+-- Simpan ke file (kalau executor punya writefile), supaya tetap ada setelah rejoin
+local function saveToFile()
+    if not writefile then
+        return
+    end
+    pcall(function()
+        writefile(SAVE_FILE, HttpService:JSONEncode(savedPoints))
+    end)
+end
+
+local function loadFromFile()
+    if not (readfile and isfile) then
+        return
+    end
+    pcall(function()
+        if isfile(SAVE_FILE) then
+            local data = HttpService:JSONDecode(readfile(SAVE_FILE))
+            if type(data) == "table" then
+                savedPoints = data
+            end
+        end
+    end)
+end
+
+-- Membaca "x, y, z" dari teks, contoh "-525.92, 47.28, -181.06"
+local function parseCoords(text)
+    local numbers = {}
+    for value in string.gmatch(text, "-?%d+%.?%d*") do
+        table.insert(numbers, tonumber(value))
+    end
+    if #numbers >= 3 then
+        return Vector3.new(numbers[1], numbers[2], numbers[3])
+    end
+    return nil
+end
+
+local refreshList -- didefinisikan di bawah
+
+local function createPointRow(index, point)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    row.BorderSizePixel = 0
+    row.LayoutOrder = index
+    row.Parent = listFrame
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, -78, 1, 0)
+    nameLabel.Position = UDim2.new(0, 6, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextSize = 12
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    nameLabel.Text = point.name
+    nameLabel.Parent = row
+
+    local function smallButton(xOffset, text, color)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0, 34, 0, 22)
+        button.Position = UDim2.new(1, xOffset, 0, 4)
+        button.BackgroundColor3 = color
+        button.BorderSizePixel = 0
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.Font = Enum.Font.SourceSansBold
+        button.TextSize = 11
+        button.Text = text
+        button.Parent = row
+        Instance.new("UICorner", button).CornerRadius = UDim.new(0, 4)
+        return button
+    end
+
+    local tpButton = smallButton(-72, "TP", Color3.fromRGB(60, 80, 130))
+    local deleteButton = smallButton(-36, "HPS", Color3.fromRGB(150, 40, 40))
+
+    tpButton.Activated:Connect(function()
+        if teleportTo(Vector3.new(point.x, point.y, point.z)) then
+            tpStatus.Text = "Teleport ke " .. point.name
+        end
+    end)
+
+    deleteButton.Activated:Connect(function()
+        table.remove(savedPoints, index)
+        saveToFile()
+        refreshList()
+        tpStatus.Text = point.name .. " dihapus"
+    end)
+end
+
+refreshList = function()
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+    for index, point in ipairs(savedPoints) do
+        createPointRow(index, point)
+    end
+end
+
+loadFromFile()
+
+-- Tambahkan lokasi bawaan yang belum ada di daftar (dicek dari namanya)
+for _, default in ipairs(DEFAULT_POINTS) do
+    local exists = false
+    for _, point in ipairs(savedPoints) do
+        if point.name == default.name then
+            exists = true
+            break
+        end
+    end
+    if not exists then
+        table.insert(savedPoints, { name = default.name, x = default.x, y = default.y, z = default.z })
+    end
+end
+
+refreshList()
+
+table.insert(connections, saveButton.Activated:Connect(function()
+    local _, rootPart = getRoot()
+    if not rootPart then
+        tpStatus.Text = "Karakter tidak ditemukan"
+        return
+    end
+    local position = rootPart.Position - Vector3.new(0, TP_HEIGHT, 0)
+    local name = inputName.Text ~= "" and inputName.Text or ("Lokasi " .. (#savedPoints + 1))
+    table.insert(savedPoints, { name = name, x = position.X, y = position.Y, z = position.Z })
+    inputName.Text = ""
+    saveToFile()
+    refreshList()
+    tpStatus.Text = name .. " tersimpan"
+end))
+
+table.insert(connections, tpCoordsButton.Activated:Connect(function()
+    local position = parseCoords(inputCoords.Text)
+    if not position then
+        tpStatus.Text = "Format salah. Contoh: 10, 5, -20"
+        return
+    end
+    if teleportTo(position) then
+        tpStatus.Text = "Teleport ke koordinat"
+    end
+end))
+
+-- Posisi karakter sekarang, diperbarui terus
+task.spawn(function()
+    while isAlive do
+        local _, rootPart = getRoot()
+        if rootPart then
+            local p = rootPart.Position
+            currentPosLabel.Text = string.format("Posisi: %.1f, %.1f, %.1f", p.X, p.Y, p.Z)
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- ==========================================================
+-- MEMATIKAN SCRIPT
+-- ==========================================================
+local function stopScript()
+    isActive = false
+    isAlive = false
+    if _G.StopAutoMiner then
+        pcall(_G.StopAutoMiner) -- matikan miner juga
+    end
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+    gui:Destroy()
+    _G.StopSimpleClicker = nil
+end
+
+_G.StopSimpleClicker = stopScript
+
+-- ==========================================================
+-- CARI POSISI MOUSE / TOUCH
+-- ==========================================================
+local lastX, lastY = nil, nil
+
+local function isInsidePanel(position)
+    local panelPosition = frame.AbsolutePosition
+    local panelSize = frame.AbsoluteSize
+    return position.X >= panelPosition.X
+        and position.X <= panelPosition.X + panelSize.X
+        and position.Y >= panelPosition.Y
+        and position.Y <= panelPosition.Y + panelSize.Y
+end
+
+-- Posisi mouse (PC)
+table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+    if isMobileMode or input.UserInputType ~= Enum.UserInputType.MouseMovement then
+        return
+    end
+    local position = UserInputService:GetMouseLocation()
+    lastX, lastY = math.floor(position.X), math.floor(position.Y)
+    positionLabel.Text = string.format("Mouse X: %d | Y: %d", lastX, lastY)
+end))
+
+-- Posisi sentuhan (Mobile)
+local function updateTouch(touch)
+    if not isMobileMode or isInsidePanel(touch.Position) then
+        return
+    end
+    local inset = GuiService:GetGuiInset()
+    lastX = math.floor(touch.Position.X + inset.X)
+    lastY = math.floor(touch.Position.Y + inset.Y)
+    positionLabel.Text = string.format("Touch X: %d | Y: %d", lastX, lastY)
+end
+
+table.insert(connections, UserInputService.TouchStarted:Connect(updateTouch))
+table.insert(connections, UserInputService.TouchMoved:Connect(updateTouch))
+
+local function usePosition()
+    if lastX and lastY then
+        inputX.Text = tostring(lastX)
+        inputY.Text = tostring(lastY)
+    end
+end
+
+-- ==========================================================
+-- TOMBOL DAN SHORTCUT
+-- ==========================================================
+table.insert(connections, minerTab.Activated:Connect(function()
+    showTab("miner")
+end))
+table.insert(connections, clickerTab.Activated:Connect(function()
+    showTab("clicker")
+end))
+table.insert(connections, teleportTab.Activated:Connect(function()
+    showTab("teleport")
+end))
+table.insert(connections, toggleButton.Activated:Connect(toggleClicker))
+table.insert(connections, pickButton.Activated:Connect(usePosition))
+table.insert(connections, exitButton.Activated:Connect(stopScript))
+table.insert(connections, modeButton.Activated:Connect(function()
+    stopClicker()
+    isMobileMode = not isMobileMode
+    lastX, lastY = nil, nil
+    applyMode()
+end))
+
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed or UserInputService:GetFocusedTextBox() then
+        return
+    end
+
+    -- 0 dan P hanya untuk tab CLICKER (tab MINER punya pengaturannya sendiri)
+    if input.KeyCode == Enum.KeyCode.Zero and currentTab == "clicker" then
+        toggleClicker()
+    elseif input.KeyCode == Enum.KeyCode.P and currentTab == "clicker" then
+        local position = UserInputService:GetMouseLocation()
+        inputX.Text = tostring(math.floor(position.X))
+        inputY.Text = tostring(math.floor(position.Y))
+    elseif input.KeyCode == Enum.KeyCode.End then
+        stopScript()
+    end
+end))
+
+
+-- ==========================================================
+-- ==========================================================
+-- TAB MINER (auto miner, dijalankan di halaman MINER)
+
+-- ==========================================================
+-- ==========================================================
+do
+-- Auto Miner
+    -- Alur: scan semua Ore_* > teleport > klik > tunggu ore hilang > tunggu drop hilang > ulang > teleport ke ore terdekat > klik di X,Y > tunggu > scan lagi > ulang
+    -- Tombol UI atau 0 = start/stop | P = ambil posisi mouse | X = mark + skip SP ini | End = matikan script
+
+    local Players = game:GetService("Players")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local UserInputService = game:GetService("UserInputService")
+    local CoreGui = game:GetService("CoreGui")
+    local GuiService = game:GetService("GuiService")
+    local RunService = game:GetService("RunService")
+
+    local player = Players.LocalPlayer
+
+    -- ==========================================================
+    -- PENGATURAN
+    -- ==========================================================
+    local HOLD_TIME = 0.05    -- lama klik ditahan
+    local CLICK_GAP = 0.15    -- jeda antar klik di satu ore
+    local EMPTY_WAIT = 2      -- jeda scan ulang saat tidak ada ore
+    local SKIP_TIME = 30      -- ore yang tidak habis dilewati selama ini (detik)
+    local PLAYER_RADIUS = 200   -- ore dilewati jika ada pemain lain sejauh ini (stud). 0 = matikan
+    local SHOW_RADIUS = true   -- tampilkan bola radius di sekitar karakter-mu (hanya terlihat olehmu)
+    local SHOW_PLAYERS = true  -- tandai pemain lain dalam radius (outline merah + nama & jarak)
+    local SHOW_TARGET = true   -- tandai ore yang sedang ditambang (outline kuning)
+    local CAMERA_MAX_ZOOM = 150 -- batas zoom out kamera (stud). nil = ikut aturan game
+
+    -- Ambil drop saat OFF
+    local PICKUP_ENABLED = true             -- true = ambil drop setelah ore hilang
+    local PICKUP_USE_REMOTE = true          -- true = ambil lewat RequestPickupItem, false = klik item di layar
+    local PICKUP_RETRY = 1                  -- kirim ulang permintaan pickup tiap sekian detik selama item masih ada
+    local PICKUP_MAX_TRY = 5                -- berhenti mencoba item ini setelah sekian kali (misal drop milik orang lain)
+    local PICKUP_RADIUS = 15                -- cari drop sejauh ini dari karakter (stud)
+    local PICKUP_PART_NAME = "Mat_StoneMesh" -- hanya ambil item dengan PrimaryPart ini. nil = semua item
+    local PICKUP_CLICKS = 2                 -- klik per item
+    local PICKUP_DISTANCE = 4               -- jarak berdiri dari item saat mengambil (stud)
+    local ORE_GONE_WAIT = 2   -- tunggu sekian detik setelah ore hilang
+    local DROP_CLEAR_WAIT = 2 -- drop harus kosong selama sekian detik berturut-turut sebelum lanjut
+    local DROP_GRACE = 1                    -- setelah ore hilang, tunggu sebentar kalau-kalau drop baru muncul (dtk)
+
+    -- Jenis ore prioritas rendah: ditambang hanya kalau tidak ada jenis lain yang bisa dituju
+    local LOW_PRIORITY_TYPES = { "Stone" }
+
+    -- Drop prioritas: kalau ada di WorldItems, miner langsung teleport ke sana dan menunggu
+    -- sampai item itu hilang (diambil), baru lanjut menambang.
+    -- Cukup sebagian nama (tidak peduli huruf besar/kecil), contoh "GoldVeinedQuartz"
+    local PRIORITY_DROP_PARTS = { "GoldVeinedQuartz" }
+    local PRIORITY_WAIT_MAX = 30 -- batas tunggu di satu drop prioritas (detik), supaya tidak macet
+
+    -- Timeout khusus per jenis ore (detik). Jenis yang tidak ada di sini memakai kolom "Timeout ore hilang".
+    local TYPE_TIMEOUTS = {
+        Aurorite = 25,
+    }
+
+    -- Matikan versi lama jika script dijalankan ulang
+    if _G.StopAutoMiner then
+        _G.StopAutoMiner()
+    end
+
+    local isActive = false
+    local isAlive = true
+    local connections = {}
+    local skipped = {} -- [oreInstance] = waktu sampai boleh dikunjungi lagi
+    local currentTarget = nil -- ore yang sedang dituju
+    local inCooldown = false  -- true saat timer menunggu ore berikutnya (status OFF)
+    local collectDrops -- didefinisikan di bawah
+    local findPriorityDrop -- didefinisikan di bawah
+    local settings = {}
+
+    -- ==========================================================
+    -- MEMBUAT UI
+    -- ==========================================================
+    -- Pakai panel gabungan: halaman MINER di dalam panel utama
+    local gui = SHARED_GUI
+    local frame = minerPage
+
+    local function createLabel(yPos, height, text)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0, 160, 0, height)
+        label.Position = UDim2.new(0, 20, 0, yPos)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 13
+        label.TextWrapped = true
+        label.Text = text
+        label.Parent = frame
+        return label
+    end
+
+    local function createTextBox(yPos, placeholder, defaultText)
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0, 160, 0, 24)
+        box.Position = UDim2.new(0, 20, 0, yPos)
+        box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        box.BorderSizePixel = 0
+        box.PlaceholderText = placeholder
+        box.Text = defaultText
+        box.ClearTextOnFocus = false
+        box.TextColor3 = Color3.fromRGB(255, 255, 255)
+        box.Font = Enum.Font.SourceSans
+        box.TextSize = 13
+        box.Parent = frame
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+        return box
+    end
+
+    local function createButton(yPos, height, text, color)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0, 160, 0, height)
+        button.Position = UDim2.new(0, 20, 0, yPos)
+        button.BackgroundColor3 = color
+        button.BorderSizePixel = 0
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.Font = Enum.Font.SourceSansBold
+        button.TextSize = 13
+        button.Text = text
+        button.Parent = frame
+        Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+        return button
+    end
+
+    local positionLabel = createLabel(5, 22, "Mouse X: 0 | Y: 0")
+    local inputX = createTextBox(30, "Klik X", "1525")
+    local inputY = createTextBox(58, "Klik Y", "463")
+    local inputClicks = createTextBox(86, "Tekan F per ore", "1")
+    local inputWait = createTextBox(114, "Timeout ore hilang (dtk)", "20")
+    local inputHeight = createTextBox(142, "Tinggi dari ore (-5 = di bawah)", "-5")
+
+    local modeButton = createButton(172, 24, "", Color3.fromRGB(80, 80, 80))
+    local pickButton = createButton(200, 24, "", Color3.fromRGB(60, 80, 130))
+    local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
+    toggleButton.TextSize = 14
+    -- Tandai SP yang sedang dituju sebagai salah taruh, lalu lewati
+    local markButton = createButton(264, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
+
+    -- Daftar SP yang dilewati. Bisa diedit manual: hapus nama untuk un-mark.
+    local inputIgnore = createTextBox(292, "Skip: SP3, SP12", "SP47, SP36, SP26")
+    inputIgnore.TextColor3 = Color3.fromRGB(255, 170, 120)
+    inputIgnore.TextTruncate = Enum.TextTruncate.AtEnd
+
+    -- ==========================================================
+    -- SAVE STATE: isi kolom disimpan ke file & dimuat lagi saat script dijalankan
+    -- ==========================================================
+    local MINER_SAVE_FILE = "auto_miner_settings.json"
+    local savedBoxes = {
+        x = inputX, y = inputY, clicks = inputClicks,
+        timeout = inputWait, height = inputHeight, skip = inputIgnore,
+    }
+
+    local function saveMinerState()
+        if not writefile then
+            return
+        end
+        local data = {}
+        for key, box in pairs(savedBoxes) do
+            data[key] = box.Text
+        end
+        pcall(function()
+            writefile(MINER_SAVE_FILE, HttpService:JSONEncode(data))
+        end)
+    end
+
+    pcall(function()
+        if readfile and isfile and isfile(MINER_SAVE_FILE) then
+            local data = HttpService:JSONDecode(readfile(MINER_SAVE_FILE))
+            for key, box in pairs(savedBoxes) do
+                if type(data[key]) == "string" then
+                    box.Text = data[key]
+                end
+            end
+        end
+    end)
+
+    -- Simpan setiap kali isi kolom berubah
+    for _, box in pairs(savedBoxes) do
+        box:GetPropertyChangedSignal("Text"):Connect(saveMinerState)
+    end
+
+    -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
+    local lookUpButton = createButton(322, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
+
+    local statusLabel = createLabel(350, 60, "Siap")
+    statusLabel.Font = Enum.Font.SourceSans
+    statusLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+    local exitButton = Instance.new("TextButton")
+    exitButton.Size = UDim2.new(0, 20, 0, 20)
+    exitButton.Position = UDim2.new(1, -25, 0, 5)
+    exitButton.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+    exitButton.BorderSizePixel = 0
+    exitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    exitButton.Font = Enum.Font.SourceSansBold
+    exitButton.TextSize = 12
+    exitButton.Text = "X"
+    exitButton.Parent = frame
+    Instance.new("UICorner", exitButton).CornerRadius = UDim.new(0, 4)
+    exitButton.Visible = false -- tombol X ada di panel utama
+
+    -- ==========================================================
+    -- MODE PC / MOBILE
+    -- ==========================================================
+    local isMobileMode = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+    local function applyMode()
+        if isMobileMode then
+            modeButton.Text = "MODE: MOBILE"
+            pickButton.Text = "AMBIL POSISI TOUCH"
+            positionLabel.Text = "Touch X: - | Y: -"
+        else
+            modeButton.Text = "MODE: PC"
+            pickButton.Text = "AMBIL POSISI (P)"
+            positionLabel.Text = "Mouse X: 0 | Y: 0"
+        end
+    end
+
+    applyMode()
+
+    local function setStatus(text)
+        statusLabel.Text = text
+    end
+
+    -- ==========================================================
+    -- OVERLAY: ORE YANG DITAMBANG
+    -- ==========================================================
+    local targetHighlight = Instance.new("Highlight")
+    targetHighlight.FillColor = Color3.fromRGB(255, 210, 80)
+    targetHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    targetHighlight.FillTransparency = 0.5
+    targetHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    targetHighlight.Enabled = false
+    targetHighlight.Parent = gui
+
+    -- Label nama di atas ore yang sedang ditambang
+    local targetBillboard = Instance.new("BillboardGui")
+    targetBillboard.Size = UDim2.new(0, 200, 0, 40)
+    targetBillboard.StudsOffset = Vector3.new(0, 4, 0)
+    targetBillboard.AlwaysOnTop = true
+    targetBillboard.Enabled = false
+    targetBillboard.Parent = gui
+
+    local targetNameLabel = Instance.new("TextLabel")
+    targetNameLabel.Size = UDim2.new(1, 0, 1, 0)
+    targetNameLabel.BackgroundTransparency = 1
+    targetNameLabel.TextColor3 = Color3.fromRGB(255, 220, 110)
+    targetNameLabel.TextStrokeTransparency = 0.2
+    targetNameLabel.Font = Enum.Font.SourceSansBold
+    targetNameLabel.TextSize = 16
+    targetNameLabel.Parent = targetBillboard
+
+    -- entry = { name, oreType, ore } atau nil untuk menghapus tanda
+    local function markTarget(entry)
+        if not SHOW_TARGET then
+            return
+        end
+        local ore = entry and entry.ore
+        targetHighlight.Adornee = ore
+        targetHighlight.Enabled = ore ~= nil
+
+        if ore then
+            targetBillboard.Adornee = ore:IsA("BasePart") and ore
+                or (ore:IsA("Model") and ore.PrimaryPart)
+                or ore:FindFirstChildWhichIsA("BasePart", true)
+            targetNameLabel.Text = string.format("%s\nOre_%s", entry.name, entry.oreType or "?")
+            targetBillboard.Enabled = true
+        else
+            targetBillboard.Adornee = nil
+            targetBillboard.Enabled = false
+        end
+    end
+
+    -- ==========================================================
+    -- SCAN ORE
+    -- ==========================================================
+    local function getOreCFrame(ore)
+        if ore:IsA("BasePart") then
+            return ore.CFrame
+        end
+        if ore:IsA("Model") then
+            if ore.PrimaryPart then
+                return ore.PrimaryPart.CFrame
+            end
+            return (ore:GetBoundingBox())
+        end
+        return nil
+    end
+
+    -- Hasil: daftar { name, ore, position }
+    local function scanOres()
+        local spawnFolder = workspace:FindFirstChild("Maps")
+            and workspace.Maps:FindFirstChild("World")
+            and workspace.Maps.World:FindFirstChild("Spawn_Ore")
+
+        if not spawnFolder then
+            return nil
+        end
+
+        local results = {}
+        for _, spawnPoint in ipairs(spawnFolder:GetChildren()) do
+            -- Ambil semua jenis ore: Ore_Stone, Ore_Iron, Ore_Gold, dst.
+            for _, oreType in ipairs(spawnPoint:GetChildren()) do
+                if oreType.Name:sub(1, 4) == "Ore_" then
+                    local ore = oreType:FindFirstChild("Ore")
+                    local cframe = ore and getOreCFrame(ore)
+                    if cframe then
+                        table.insert(results, {
+                            name = spawnPoint.Name,              -- dipakai untuk Skip / MARK
+                            oreType = oreType.Name:sub(5),       -- contoh: "Stone", "Iron"
+                            ore = ore,
+                            position = cframe.Position,
+                        })
+                    end
+                end
+            end
+        end
+        return results
+    end
+
+    -- Mengecek apakah ada pemain lain di sekitar sebuah posisi
+    local function getNearbyPlayer(position)
+        if PLAYER_RADIUS <= 0 then
+            return nil
+        end
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player then
+                local otherCharacter = other.Character
+                local otherRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+                if otherRoot and (otherRoot.Position - position).Magnitude <= PLAYER_RADIUS then
+                    return other
+                end
+            end
+        end
+        return nil
+    end
+
+    -- Membaca kolom Skip menjadi daftar nama, contoh "SP3, SP12" -> { "SP3", "SP12" }
+    local function readIgnoreList()
+        local list = {}
+        for name in string.gmatch(inputIgnore.Text, "[^,%s]+") do
+            if not table.find(list, name) then
+                table.insert(list, name)
+            end
+        end
+        return list
+    end
+
+    -- Memilih ore terdekat yang tidak dilewati, tidak di-mark, dan tidak ada pemain lain di dekatnya.
+    -- Prioritas: jenis selain LOW_PRIORITY_TYPES (misal Ore_Stone) dulu; Stone hanya kalau tidak ada yang lain.
+    local function pickNearestOre(results, fromPosition)
+        local now = os.clock()
+        local ignoreList = readIgnoreList()
+        local best, bestDistance = nil, math.huge          -- jenis prioritas (selain Stone)
+        local backup, backupDistance = nil, math.huge      -- jenis prioritas rendah (Stone)
+
+        for _, entry in ipairs(results) do
+            local skipUntil = skipped[entry.ore]
+            local isMarked = table.find(ignoreList, entry.name) ~= nil
+            if not isMarked and (not skipUntil or now >= skipUntil) and not getNearbyPlayer(entry.position) then
+                local distance = (entry.position - fromPosition).Magnitude
+                if table.find(LOW_PRIORITY_TYPES, entry.oreType) then
+                    if distance < backupDistance then
+                        backup, backupDistance = entry, distance
+                    end
+                elseif distance < bestDistance then
+                    best, bestDistance = entry, distance
+                end
+            end
+        end
+        return best or backup
+    end
+
+    -- ==========================================================
+    -- FUNGSI DASAR
+    -- ==========================================================
+    local function waitFor(seconds)
+        local elapsed = 0
+        while elapsed < seconds do
+            if not isActive or not isAlive then
+                return false
+            end
+            elapsed += task.wait()
+        end
+        return isActive and isAlive
+    end
+
+    local function clickOnce(x, y)
+        if isMobileMode then
+            local success = pcall(function()
+                VirtualInputManager:SendTouchEvent(0, 0, x, y)
+                task.wait(HOLD_TIME)
+                VirtualInputManager:SendTouchEvent(0, 2, x, y)
+            end)
+            return success
+        end
+
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(HOLD_TIME)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        return true
+    end
+
+    -- Teleport karakter ke atas ore, menghadap arah yang sama
+    local function teleportTo(position, height)
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then
+            return false
+        end
+
+        local target = position + Vector3.new(0, height, 0)
+        local lookDirection = rootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+        if lookDirection.Magnitude < 0.01 then
+            lookDirection = Vector3.new(0, 0, -1)
+        end
+
+        character:PivotTo(CFrame.lookAt(target, target + lookDirection.Unit))
+        rootPart.AssemblyLinearVelocity = Vector3.zero -- cegah terlempar setelah teleport
+        return true
+    end
+
+    -- ==========================================================
+    -- HADAP ATAS: badan rebah menghadap atas + kamera mendongak, dipaksa tiap frame
+    -- ==========================================================
+    local lookUpEnabled = false
+
+    -- ==========================================================
+    -- ANTI BERENANG: matikan state & animasi renang selama miner berjalan
+    -- ==========================================================
+    local NO_SWIM = true
+
+    local function setSwimEnabled(enabled)
+        local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then
+            return
+        end
+        pcall(function()
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming, enabled)
+        end)
+        if not enabled then
+            -- Hentikan animasi renang yang sudah terlanjur jalan
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    local name = (track.Name .. " " .. (track.Animation and track.Animation.Name or "")):lower()
+                    if name:find("swim", 1, true) then
+                        track:Stop(0)
+                    end
+                end
+            end
+            if humanoid:GetState() == Enum.HumanoidStateType.Swimming then
+                humanoid:ChangeState(Enum.HumanoidStateType.Running)
+            end
+        end
+    end
+
+    -- Dicek tiap 0.5 detik: selama miner jalan, renang dimatikan (juga setelah respawn)
+    task.spawn(function()
+        local swimOff = false
+        while isAlive do
+            local shouldBlock = NO_SWIM and isActive
+            if shouldBlock then
+                setSwimEnabled(false)
+                swimOff = true
+            elseif swimOff then
+                setSwimEnabled(true)
+                swimOff = false
+            end
+            task.wait(0.5)
+        end
+        if swimOff then
+            setSwimEnabled(true)
+        end
+    end)
+    local LOOK_UP_TILT = 180  -- 180 = terbalik (kepala di bawah, kaki di atas). 90 = telentang
     local CAMERA_BIND = "ToolkitMinerLookUp"
 
     local function setStandStates(enabled, humanoid)
