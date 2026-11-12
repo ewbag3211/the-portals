@@ -151,7 +151,7 @@ local inputDelay = createTextBox(131, "Setiap ... detik", "15")
 
 local modeButton = createButton(164, 26, "", Color3.fromRGB(80, 80, 80))
 local pickButton = createButton(197, 26, "AMBIL POSISI TOUCH", Color3.fromRGB(60, 80, 130))
-local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
+local toggleButton = createButton(258, 30, "START", Color3.fromRGB(20, 120, 60))
 toggleButton.TextSize = 14
 
 local infoLabel = createLabel(264, 30, "Putaran: 0")
@@ -213,7 +213,7 @@ listPadding.PaddingLeft = UDim.new(0, 3)
 listPadding.PaddingRight = UDim.new(0, 8)
 listPadding.Parent = listFrame
 
-local PAGE_HEIGHTS = { miner = 434, clicker = 298, teleport = 332 }
+local PAGE_HEIGHTS = { miner = 462, clicker = 298, teleport = 332 }
 local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
 local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
 
@@ -820,22 +820,23 @@ do
     local inputY = createField(58, "Posisi klik Y (layar)", "463", "y")
     local inputClicks = createField(86, "Tekan F per ore", "1", "kali")
     local inputWait = createField(114, "Timeout ore hilang (dtk)", "20", "detik")
-    local inputHeight = createField(142, "Offset Y ore (minus = di bawah)", "-5", "stud")
+    local inputHeight = createField(142, "Offset Y teleport ke ore", "-5", "stud")
+    local inputDropHeight = createField(170, "Offset Y ambil drop", "3", "stud")
 
-    local modeButton = createButton(172, 24, "", Color3.fromRGB(80, 80, 80))
-    local pickButton = createButton(200, 24, "", Color3.fromRGB(60, 80, 130))
+    local modeButton = createButton(200, 24, "", Color3.fromRGB(80, 80, 80))
+    local pickButton = createButton(228, 24, "", Color3.fromRGB(60, 80, 130))
     local toggleButton = createButton(230, 30, "START", Color3.fromRGB(20, 120, 60))
     toggleButton.TextSize = 14
     -- Tandai SP yang sedang dituju sebagai salah taruh, lalu lewati
-    local markButton = createButton(264, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
+    local markButton = createButton(292, 24, "MARK + SKIP SP INI (X)", Color3.fromRGB(150, 90, 20))
 
     -- Daftar SP yang dilewati. Bisa diedit manual: hapus nama untuk un-mark.
-    local skipLabel = createLabel(292, 14, "SP di-skip:")
+    local skipLabel = createLabel(320, 14, "SP di-skip:")
     skipLabel.Font = Enum.Font.SourceSans
     skipLabel.TextSize = 12
     skipLabel.TextXAlignment = Enum.TextXAlignment.Left
     skipLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    local inputIgnore = createTextBox(306, "Skip: SP3, SP12", "SP47, SP36, SP26")
+    local inputIgnore = createTextBox(334, "Skip: SP3, SP12", "SP47, SP36, SP26")
     inputIgnore.TextColor3 = Color3.fromRGB(255, 170, 120)
     inputIgnore.TextTruncate = Enum.TextTruncate.AtEnd
 
@@ -845,7 +846,7 @@ do
     local MINER_SAVE_FILE = "auto_miner_settings.json"
     local savedBoxes = {
         x = inputX, y = inputY, clicks = inputClicks,
-        timeout = inputWait, skip = inputIgnore, -- tinggi TIDAK disimpan, selalu mulai dari -5
+        timeout = inputWait, skip = inputIgnore, dropHeight = inputDropHeight, -- tinggi TIDAK disimpan, selalu mulai dari -5
     }
 
     local function saveMinerState()
@@ -878,9 +879,9 @@ do
     end
 
     -- Toggle: kamera & badan menghadap ke atas selama miner berjalan
-    local lookUpButton = createButton(336, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
+    local lookUpButton = createButton(364, 24, "TERBALIK: OFF", Color3.fromRGB(120, 30, 30))
 
-    local statusLabel = createLabel(364, 60, "Siap")
+    local statusLabel = createLabel(392, 60, "Siap")
     statusLabel.Font = Enum.Font.SourceSans
     statusLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
 
@@ -1361,6 +1362,7 @@ do
         settings.clicks = math.clamp(math.floor(clicks), 1, 1000)
         settings.waitTime = math.max(waitTime, 0)
         settings.height = height -- contoh -5 = 5 stud di bawah titik Y ore
+        settings.dropHeight = tonumber(inputDropHeight.Text) or 3
         return true
     end
 
@@ -1398,7 +1400,7 @@ do
         end
     end
 
-    for _, box in ipairs({ inputX, inputY, inputClicks, inputWait, inputHeight, inputIgnore }) do
+    for _, box in ipairs({ inputX, inputY, inputClicks, inputWait, inputHeight, inputDropHeight, inputIgnore }) do
         table.insert(connections, box.Focused:Connect(function()
             -- Saat timer OFF, kolom boleh diedit tanpa menghentikan miner
             if isActive and not inCooldown then
@@ -1453,7 +1455,7 @@ do
 
         local flat = (rootPart.Position - part.Position) * Vector3.new(1, 0, 1)
         local away = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, 1)
-        local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, 3, 0)
+        local standAt = part.Position + away * PICKUP_DISTANCE + Vector3.new(0, settings.dropHeight or 3, 0)
         local lookAt = Vector3.new(part.Position.X, standAt.Y, part.Position.Z)
 
         rootPart.Anchored = false -- lepas kunci "hadap atas" sebentar supaya bisa pindah
