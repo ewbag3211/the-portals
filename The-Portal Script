@@ -4,7 +4,7 @@
 -- Tab TELEPORT: simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
 -- Contoh: jumlah 5, delay 3 = klik 5x, tunggu 3 detik, klik 5x lagi, dst.
 -- 0 = start/stop tab yang sedang terbuka | P = ambil posisi mouse | X = mark SP (miner)
--- G = jendela Gold Status | Tombol X di panel atau End = matikan semuanya
+-- G = jendela Gold Status | B = jendela Blacklist Player | Tombol X di panel atau End = matikan semuanya
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
@@ -21,7 +21,7 @@ local MAX_CLICKS = 1000  -- batas jumlah klik per putaran
 local player = Players.LocalPlayer
 local TP_HEIGHT = 3                            -- teleport sedikit di atas titik supaya tidak nyangkut
 local SAVE_FILE = "macro_teleport_points.json" -- sama dengan script macro, jadi lokasi tersimpan dipakai bersama
-local DISCORD_WEBHOOK_URL = ""                 -- tempel URL webhook discord kamu di sini
+local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1445851752455999579/KM64GWHNgZrY05tBO5xhmf3O40V8CVhrhKGG78UTeuNgyR7fnNGP5x4Qre9NaFG8cIg9"
 
 -- Lokasi bawaan: selalu ada di daftar (ditambahkan otomatis kalau belum ada)
 local DEFAULT_POINTS = {
@@ -1846,6 +1846,21 @@ do
         end
         inCooldown = false
 
+        -- Jeda istirahat tiap 10x mining (teleport)
+        if mined > 0 and mined % 10 == 0 then
+            local restSeconds = 30
+            while restSeconds > 0 and isActive and isAlive do
+                toggleButton.Text = string.format("JEDA 10x (%ds)", restSeconds)
+                toggleButton.BackgroundColor3 = Color3.fromRGB(150, 90, 20)
+                setStatus(string.format("Istirahat 10x mining (total %d) | Jeda %d dtk...", mined, restSeconds))
+                local step = math.min(1, restSeconds)
+                if not waitFor(step) then
+                    return
+                end
+                restSeconds -= step
+            end
+        end
+
         -- ON lagi: baca ulang kolom, siapa tahu diedit selama OFF
         if not loadSettings() then
             stopMiner("Input tidak valid, cek kolom")
@@ -2727,6 +2742,315 @@ do
         end
         if input.KeyCode == Enum.KeyCode.G then
             statusFrame.Visible = not statusFrame.Visible
+        end
+    end))
+end
+
+-- ==========================================================
+-- JENDELA TERPISAH: BLACKLIST PLAYER (buka/tutup dengan tombol B)
+-- ==========================================================
+do
+    local BLACKLIST_FILE = "macro_blacklist_players.json"
+    local blacklistPlayers = {}
+    local notifiedInServer = {}
+
+    local blFrame = Instance.new("Frame")
+    blFrame.Size = UDim2.new(0, 200, 0, 360)
+    blFrame.Position = UDim2.new(0, 240, 0, 100)
+    blFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    blFrame.BorderSizePixel = 0
+    blFrame.Parent = gui
+    Instance.new("UICorner", blFrame).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIDragDetector", blFrame)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -40, 0, 28)
+    title.Position = UDim2.new(0, 12, 0, 2)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(255, 90, 90)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Text = "BLACKLIST PLAYERS"
+    title.Parent = blFrame
+
+    local blCloseButton = Instance.new("TextButton")
+    blCloseButton.Size = UDim2.new(0, 20, 0, 20)
+    blCloseButton.Position = UDim2.new(1, -25, 0, 6)
+    blCloseButton.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+    blCloseButton.BorderSizePixel = 0
+    blCloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    blCloseButton.Font = Enum.Font.SourceSansBold
+    blCloseButton.TextSize = 12
+    blCloseButton.Text = "–"
+    blCloseButton.Parent = blFrame
+    Instance.new("UICorner", blCloseButton).CornerRadius = UDim.new(0, 4)
+
+    -- Status banner peringatan
+    local alertBanner = Instance.new("TextLabel")
+    alertBanner.Size = UDim2.new(1, -20, 0, 32)
+    alertBanner.Position = UDim2.new(0, 10, 0, 32)
+    alertBanner.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    alertBanner.TextColor3 = Color3.fromRGB(100, 255, 120)
+    alertBanner.Font = Enum.Font.SourceSansBold
+    alertBanner.TextSize = 12
+    alertBanner.TextWrapped = true
+    alertBanner.Text = "Status: Aman (0 terdeteksi)"
+    alertBanner.Parent = blFrame
+    Instance.new("UICorner", alertBanner).CornerRadius = UDim.new(0, 6)
+
+    -- Input & Tombol Tambah
+    local inputUser = Instance.new("TextBox")
+    inputUser.Size = UDim2.new(1, -20, 0, 26)
+    inputUser.Position = UDim2.new(0, 10, 0, 70)
+    inputUser.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    inputUser.BorderSizePixel = 0
+    inputUser.PlaceholderText = "Username target..."
+    inputUser.Text = ""
+    inputUser.ClearTextOnFocus = false
+    inputUser.TextColor3 = Color3.fromRGB(255, 255, 255)
+    inputUser.Font = Enum.Font.SourceSans
+    inputUser.TextSize = 13
+    inputUser.Parent = blFrame
+    Instance.new("UICorner", inputUser).CornerRadius = UDim.new(0, 5)
+
+    local addBtn = Instance.new("TextButton")
+    addBtn.Size = UDim2.new(1, -20, 0, 26)
+    addBtn.Position = UDim2.new(0, 10, 0, 102)
+    addBtn.BackgroundColor3 = Color3.fromRGB(160, 40, 40)
+    addBtn.BorderSizePixel = 0
+    addBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    addBtn.Font = Enum.Font.SourceSansBold
+    addBtn.TextSize = 12
+    addBtn.Text = "+ TAMBAH BLACKLIST"
+    addBtn.Parent = blFrame
+    Instance.new("UICorner", addBtn).CornerRadius = UDim.new(0, 5)
+
+    -- Daftar blacklist (ScrollingFrame)
+    local blScroll = Instance.new("ScrollingFrame")
+    blScroll.Size = UDim2.new(1, -20, 0, 215)
+    blScroll.Position = UDim2.new(0, 10, 0, 134)
+    blScroll.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    blScroll.BorderSizePixel = 0
+    blScroll.ScrollBarThickness = 5
+    blScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    blScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    blScroll.Parent = blFrame
+    Instance.new("UICorner", blScroll).CornerRadius = UDim.new(0, 6)
+
+    local blLayout = Instance.new("UIListLayout")
+    blLayout.Padding = UDim.new(0, 3)
+    blLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    blLayout.Parent = blScroll
+
+    local blPadding = Instance.new("UIPadding")
+    blPadding.PaddingTop = UDim.new(0, 3)
+    blPadding.PaddingLeft = UDim.new(0, 3)
+    blPadding.PaddingRight = UDim.new(0, 6)
+    blPadding.Parent = blScroll
+
+    local function saveBlacklist()
+        if not writefile then return end
+        pcall(function()
+            writefile(BLACKLIST_FILE, HttpService:JSONEncode(blacklistPlayers))
+        end)
+    end
+
+    local function loadBlacklist()
+        if not (readfile and isfile and isfile(BLACKLIST_FILE)) then return end
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(BLACKLIST_FILE))
+            if type(data) == "table" then
+                blacklistPlayers = data
+            end
+        end)
+    end
+
+    local function sendBlacklistWebhook(targetName)
+        if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "" then return end
+        local httpRequest = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
+        if not httpRequest then return end
+
+        local payload = {
+            embeds = {
+                {
+                    title = "🚨 PERINGATAN: Blacklist Player Terdeteksi!",
+                    color = 16724016, -- Merah (0xFF3030)
+                    fields = {
+                        { name = "⚠️ Target Terdeteksi", value = targetName, inline = true },
+                        { name = "👤 Akun Kamu", value = player.Name, inline = true },
+                        { name = "🕒 Waktu", value = os.date("%H:%M:%S"), inline = false }
+                    },
+                    footer = { text = "Auto Miner Toolkit - Blacklist Watcher" },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+            }
+        }
+
+        task.spawn(function()
+            pcall(function()
+                httpRequest({
+                    Url = DISCORD_WEBHOOK_URL,
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = HttpService:JSONEncode(payload)
+                })
+            end)
+        end)
+    end
+
+    local refreshBlacklistUI -- didefinisikan di bawah
+
+    local function isPlayerInServer(targetName)
+        local targetLower = targetName:lower()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower() == targetLower or (p.DisplayName and p.DisplayName:lower() == targetLower) then
+                return true, p.Name
+            end
+        end
+        return false, nil
+    end
+
+    refreshBlacklistUI = function()
+        for _, child in ipairs(blScroll:GetChildren()) do
+            if child:IsA("Frame") then
+                child:Destroy()
+            end
+        end
+
+        local activeFound = {}
+        for index, username in ipairs(blacklistPlayers) do
+            local inServer, actualName = isPlayerInServer(username)
+            if inServer then
+                table.insert(activeFound, actualName or username)
+            end
+
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, 0, 0, 28)
+            row.BackgroundColor3 = inServer and Color3.fromRGB(70, 20, 20) or Color3.fromRGB(40, 40, 40)
+            row.BorderSizePixel = 0
+            row.LayoutOrder = index
+            row.Parent = blScroll
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
+
+            local nameLabel = Instance.new("TextLabel")
+            nameLabel.Size = UDim2.new(1, -75, 1, 0)
+            nameLabel.Position = UDim2.new(0, 6, 0, 0)
+            nameLabel.BackgroundTransparency = 1
+            nameLabel.TextColor3 = inServer and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(220, 220, 220)
+            nameLabel.Font = inServer and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+            nameLabel.TextSize = 12
+            nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+            nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            nameLabel.Text = string.format("%s%s", username, inServer and " [ONLINE]" or "")
+            nameLabel.Parent = row
+
+            local delBtn = Instance.new("TextButton")
+            delBtn.Size = UDim2.new(0, 32, 0, 20)
+            delBtn.Position = UDim2.new(1, -36, 0, 4)
+            delBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+            delBtn.BorderSizePixel = 0
+            delBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            delBtn.Font = Enum.Font.SourceSansBold
+            delBtn.TextSize = 11
+            delBtn.Text = "HPS"
+            delBtn.Parent = row
+            Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+
+            delBtn.Activated:Connect(function()
+                table.remove(blacklistPlayers, index)
+                saveBlacklist()
+                refreshBlacklistUI()
+            end)
+        end
+
+        if #activeFound > 0 then
+            alertBanner.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
+            alertBanner.TextColor3 = Color3.fromRGB(255, 255, 255)
+            alertBanner.Text = string.format("⚠️ ADA DI SERVER:\n%s", table.concat(activeFound, ", "))
+        else
+            alertBanner.BackgroundColor3 = Color3.fromRGB(40, 45, 40)
+            alertBanner.TextColor3 = Color3.fromRGB(100, 255, 120)
+            alertBanner.Text = string.format("Status: Aman (%d player aman)", #blacklistPlayers)
+        end
+    end
+
+    local function checkAndNotify()
+        local detectedAny = false
+        for _, username in ipairs(blacklistPlayers) do
+            local inServer, actualName = isPlayerInServer(username)
+            if inServer then
+                detectedAny = true
+                local targetKey = (actualName or username):lower()
+                if not notifiedInServer[targetKey] then
+                    notifiedInServer[targetKey] = true
+                    print(string.format("[BLACKLIST ALERT] %s terdeteksi di server!", actualName or username))
+                    sendBlacklistWebhook(actualName or username)
+                end
+            end
+        end
+        refreshBlacklistUI()
+    end
+
+    table.insert(connections, addBtn.Activated:Connect(function()
+        local target = inputUser.Text:gsub("%s+", "")
+        if target ~= "" then
+            local exists = false
+            for _, u in ipairs(blacklistPlayers) do
+                if u:lower() == target:lower() then
+                    exists = true
+                    break
+                end
+            end
+            if not exists then
+                table.insert(blacklistPlayers, target)
+                inputUser.Text = ""
+                saveBlacklist()
+                checkAndNotify()
+            end
+        end
+    end))
+
+    loadBlacklist()
+    refreshBlacklistUI()
+
+    -- Pantau pemain yang masuk
+    table.insert(connections, Players.PlayerAdded:Connect(function(newPlayer)
+        for _, u in ipairs(blacklistPlayers) do
+            if newPlayer.Name:lower() == u:lower() or (newPlayer.DisplayName and newPlayer.DisplayName:lower() == u:lower()) then
+                task.wait(1)
+                checkAndNotify()
+                break
+            end
+        end
+    end))
+
+    table.insert(connections, Players.PlayerRemoving:Connect(function(leftPlayer)
+        local key = leftPlayer.Name:lower()
+        if notifiedInServer[key] then
+            notifiedInServer[key] = nil
+        end
+        task.wait(0.5)
+        refreshBlacklistUI()
+    end))
+
+    task.spawn(function()
+        while isAlive do
+            checkAndNotify()
+            task.wait(3)
+        end
+    end)
+
+    table.insert(connections, blCloseButton.Activated:Connect(function()
+        blFrame.Visible = false
+    end))
+
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.B then
+            blFrame.Visible = not blFrame.Visible
         end
     end))
 end
