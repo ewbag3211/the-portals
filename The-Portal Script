@@ -21,6 +21,7 @@ local MAX_CLICKS = 1000  -- batas jumlah klik per putaran
 local player = Players.LocalPlayer
 local TP_HEIGHT = 3                            -- teleport sedikit di atas titik supaya tidak nyangkut
 local SAVE_FILE = "macro_teleport_points.json" -- sama dengan script macro, jadi lokasi tersimpan dipakai bersama
+local DISCORD_WEBHOOK_URL = ""                 -- tempel URL webhook discord kamu di sini
 
 -- Lokasi bawaan: selalu ada di daftar (ditambahkan otomatis kalau belum ada)
 local DEFAULT_POINTS = {
@@ -2589,6 +2590,64 @@ do
         return matchKeyword((part and part.Name or "") .. " " .. item.Name) ~= nil, part
     end
 
+    local totalGoldGained = 0
+
+    local function sendGoldWebhook(itemName, spLocation)
+        if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "" then
+            return
+        end
+
+        local httpRequest = request or http_request or (syn and syn.request) or (fluxus and fluxus.request)
+        if not httpRequest then
+            return
+        end
+
+        totalGoldGained += 1
+
+        local payload = {
+            embeds = {
+                {
+                    title = "✨ Gold Gathered!",
+                    color = 16766720, -- Warna emas
+                    fields = {
+                        {
+                            name = "👤 Username",
+                            value = player.Name,
+                            inline = true
+                        },
+                        {
+                            name = "📦 Gold Gained",
+                            value = string.format("%s (Total: %d)", itemName or "Gold", totalGoldGained),
+                            inline = true
+                        },
+                        {
+                            name = "📍 Lokasi (SP)",
+                            value = spLocation or "Unknown",
+                            inline = false
+                        }
+                    },
+                    footer = {
+                        text = "Auto Miner Toolkit"
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+            }
+        }
+
+        task.spawn(function()
+            pcall(function()
+                httpRequest({
+                    Url = DISCORD_WEBHOOK_URL,
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "application/json"
+                    },
+                    Body = HttpService:JSONEncode(payload)
+                })
+            end)
+        end)
+    end
+
     local function onItemAdded(item)
         task.wait(0.1) -- tunggu PrimaryPart sempat termuat
         local gold, part = isGold(item)
@@ -2602,6 +2661,7 @@ do
             born = os.clock(),
             status = "ada",
             lastPosition = part.Position,
+            itemName = part.Name,
         }
         entryByItem[item] = entry
         table.insert(history, 1, entry)
@@ -2627,6 +2687,8 @@ do
         if not near then
             print(string.format("[GOLD] %s dekat %s HILANG setelah %ds (bukan diambil kamu)",
                 entry.time, entry.sp, entry.lifetime))
+        else
+            sendGoldWebhook(entry.itemName or item.Name, entry.sp)
         end
         refreshHistory()
     end
