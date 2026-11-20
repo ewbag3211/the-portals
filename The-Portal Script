@@ -1,9 +1,11 @@
--- Toolkit: Auto Miner + Simple Clicker + Teleport
--- Tab MINER   : auto miner (scan ore > teleport > klik > deteksi remote > tunggu ore & drop hilang > ulang)
--- Tab CLICKER : [jumlah] klik setiap [delay] detik, berulang sampai di-STOP.
--- Tab TELEPORT: simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
+-- Toolkit: Auto Miner + Simple Clicker + Teleport + Auto Buy
+-- Menu utama berisi 4 tombol; tiap tombol membuka window fiturnya sendiri.
+-- Window MINER    : auto miner (scan ore > teleport > klik > deteksi remote > tunggu ore & drop hilang > ulang)
+-- Window CLICKER  : [jumlah] klik setiap [delay] detik, berulang sampai di-STOP.
+-- Window TELEPORT : simpan posisi, teleport ke posisi tersimpan, atau ke koordinat X, Y, Z
+-- Window AUTO BUY : beli item otomatis lewat remote toko game
 -- Contoh: jumlah 5, delay 3 = klik 5x, tunggu 3 detik, klik 5x lagi, dst.
--- 0 = start/stop tab yang sedang terbuka | P = ambil posisi mouse | X = mark SP (miner)
+-- 0 = start/stop window yang aktif (terakhir dibuka / diklik) | P = ambil posisi mouse | X = mark SP (miner)
 -- G = jendela Gold Status | B = jendela Blacklist Player | Tombol X di panel atau End = matikan semuanya
 
 local Players = game:GetService("Players")
@@ -49,8 +51,10 @@ gui.Name = "SimpleClickerUI"
 gui.ResetOnSpawn = false
 gui.Parent = CoreGui
 
+-- Menu utama: berisi 4 tombol (AUTO MINING / AUTO CLICK / TELEPORT / AUTO BUY).
+-- Tiap tombol membuka / menutup window sendiri.
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 422)
+frame.Size = UDim2.new(0, 200, 0, 186)
 frame.Position = UDim2.new(0, 30, 0, 100)
 frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 frame.BorderSizePixel = 0
@@ -58,41 +62,99 @@ frame.Parent = gui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 Instance.new("UIDragDetector", frame)
 
-local HEADER = 32 -- tinggi baris tab di atas
+local HEADER = 32 -- tinggi baris judul di atas tiap window
 
--- Tiga tab berdampingan, menyisakan tempat untuk tombol X di kanan
+local menuTitle = Instance.new("TextLabel")
+menuTitle.Size = UDim2.new(1, -40, 0, 24)
+menuTitle.Position = UDim2.new(0, 12, 0, 5)
+menuTitle.BackgroundTransparency = 1
+menuTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+menuTitle.Font = Enum.Font.SourceSansBold
+menuTitle.TextSize = 15
+menuTitle.TextXAlignment = Enum.TextXAlignment.Left
+menuTitle.Text = "TOOLKIT"
+menuTitle.Parent = frame
+
+-- Tombol menu (dulu tab), tersusun ke bawah
 local function createTab(index, text)
     local tab = Instance.new("TextButton")
-    tab.Size = UDim2.new(0, 52, 0, 24)
-    tab.Position = UDim2.new(0, 6 + (index - 1) * 56, 0, 5)
+    tab.Size = UDim2.new(1, -24, 0, 30)
+    tab.Position = UDim2.new(0, 12, 0, HEADER + 4 + (index - 1) * 36)
     tab.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
     tab.BorderSizePixel = 0
     tab.TextColor3 = Color3.fromRGB(255, 255, 255)
     tab.Font = Enum.Font.SourceSansBold
-    tab.TextSize = 12
+    tab.TextSize = 14
     tab.Text = text
     tab.Parent = frame
-    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 5)
+    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 6)
     return tab
 end
 
-local minerTab = createTab(1, "MINER")
-local clickerTab = createTab(2, "CLICKER")
+local minerTab = createTab(1, "AUTO MINING")
+local clickerTab = createTab(2, "AUTO CLICK")
 local teleportTab = createTab(3, "TELEPORT")
+local buyTab = createTab(4, "AUTO BUY")
 
-local function createPage()
+-- Tiap fitur punya window sendiri (bisa digeser, ditutup dengan "-").
+-- Isi fitur tetap dibuat di "page" di dalam window, posisinya sama seperti dulu.
+local windows = {}
+local WINDOW_TITLES = { miner = "AUTO MINING", clicker = "AUTO CLICK", teleport = "TELEPORT", buy = "AUTO BUY" }
+local WINDOW_X = { miner = 240, clicker = 450, teleport = 660, buy = 870 }
+local showTab -- diisi di bawah
+
+local function createPage(name)
+    local window = Instance.new("Frame")
+    window.Size = UDim2.new(0, 200, 0, 300)
+    window.Position = UDim2.new(0, WINDOW_X[name], 0, 100)
+    window.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    window.BorderSizePixel = 0
+    window.Visible = false
+    window.Parent = gui
+    Instance.new("UICorner", window).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIDragDetector", window)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -40, 0, 24)
+    title.Position = UDim2.new(0, 12, 0, 5)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Text = WINDOW_TITLES[name]
+    title.Parent = window
+
+    local close = Instance.new("TextButton")
+    close.Size = UDim2.new(0, 20, 0, 20)
+    close.Position = UDim2.new(1, -25, 0, 7)
+    close.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+    close.BorderSizePixel = 0
+    close.TextColor3 = Color3.fromRGB(255, 255, 255)
+    close.Font = Enum.Font.SourceSansBold
+    close.TextSize = 12
+    close.Text = "-"
+    close.Parent = window
+    Instance.new("UICorner", close).CornerRadius = UDim.new(0, 4)
+    close.Activated:Connect(function()
+        showTab(name) -- tutup window ini
+    end)
+
     local page = Instance.new("Frame")
     page.Size = UDim2.new(1, 0, 1, -HEADER)
     page.Position = UDim2.new(0, 0, 0, HEADER)
     page.BackgroundTransparency = 1
-    page.Parent = frame
+    page.Parent = window
+    windows[name] = window
     return page
 end
 
-local minerPage = createPage()
-local clickerPage = createPage()
-local teleportPage = createPage()
-local currentTab = "miner"
+local minerPage = createPage("miner")
+local clickerPage = createPage("clicker")
+local teleportPage = createPage("teleport")
+local buyPage = createPage("buy")
+-- Window yang "aktif" (terakhir dibuka / diklik): tombol 0 dan P bekerja di window ini
+local currentTab = nil
 local SHARED_GUI = gui -- dipakai halaman MINER
 
 -- Elemen dibuat di halaman ini (diganti ke teleportPage saat membuat tab teleport)
@@ -159,6 +221,28 @@ local infoLabel = createLabel(264, 30, "Putaran: 0")
 infoLabel.Font = Enum.Font.SourceSans
 infoLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
 
+-- Tab CLICKER sekarang hanya menekan F: sembunyikan kolom posisi klik & mode,
+-- lalu rapikan susunan sisanya
+positionLabel.Text = "TEKAN F OTOMATIS"
+inputX.Visible = false
+inputY.Visible = false
+modeButton.Visible = false
+pickButton.Visible = false
+inputAmount.Position = UDim2.new(0, 124, 0, 32)
+inputDelay.Position = UDim2.new(0, 124, 0, 65)
+inputAmount.Size = UDim2.new(0, 56, 0, 26)
+inputDelay.Size = UDim2.new(0, 56, 0, 26)
+for _, row in ipairs({ { 32, "Tekan F per putaran" }, { 65, "Setiap ... detik" } }) do
+    local rowLabel = createLabel(row[1] + 3, 20, row[2])
+    rowLabel.Size = UDim2.new(0, 100, 0, 20)
+    rowLabel.Font = Enum.Font.SourceSans
+    rowLabel.TextSize = 13
+    rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+    rowLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+end
+infoLabel.Position = UDim2.new(0, 20, 0, 96)
+toggleButton.Position = UDim2.new(0, 20, 0, 128)
+
 local exitButton = Instance.new("TextButton")
 exitButton.Size = UDim2.new(0, 20, 0, 20)
 exitButton.Position = UDim2.new(1, -25, 0, 7)
@@ -214,21 +298,39 @@ listPadding.PaddingLeft = UDim.new(0, 3)
 listPadding.PaddingRight = UDim.new(0, 8)
 listPadding.Parent = listFrame
 
-local PAGE_HEIGHTS = { miner = 490, clicker = 298, teleport = 332 }
-local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab }
-local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage }
+local PAGE_HEIGHTS = { miner = 490, clicker = 168, teleport = 332, buy = 250 }
+local tabButtons = { miner = minerTab, clicker = clickerTab, teleport = teleportTab, buy = buyTab }
+local pages = { miner = minerPage, clicker = clickerPage, teleport = teleportPage, buy = buyPage }
 
-local function showTab(name)
-    currentTab = name
-    for tabName, page in pairs(pages) do
-        page.Visible = tabName == name
-        tabButtons[tabName].BackgroundColor3 = tabName == name and Color3.fromRGB(90, 90, 90)
-            or Color3.fromRGB(55, 55, 55)
+-- Tombol menu = buka / tutup window fitur itu
+showTab = function(name)
+    local window = windows[name]
+    window.Visible = not window.Visible
+    window.Size = UDim2.new(0, 200, 0, HEADER + PAGE_HEIGHTS[name])
+    tabButtons[name].BackgroundColor3 = window.Visible and Color3.fromRGB(90, 90, 90)
+        or Color3.fromRGB(55, 55, 55)
+    if window.Visible then
+        currentTab = name
+    elseif currentTab == name then
+        -- Window aktif ditutup: pindah ke window lain yang masih terbuka
+        currentTab = nil
+        for otherName, otherWindow in pairs(windows) do
+            if otherWindow.Visible then
+                currentTab = otherName
+            end
+        end
     end
-    frame.Size = UDim2.new(0, 200, 0, HEADER + PAGE_HEIGHTS[name])
 end
 
-showTab("miner")
+-- Klik di dalam window = window itu jadi aktif (untuk tombol 0 / P)
+for name, window in pairs(windows) do
+    window.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            currentTab = name
+        end
+    end)
+end
 
 -- ==========================================================
 -- MODE PC / MOBILE
@@ -239,11 +341,11 @@ local function applyMode()
     if isMobileMode then
         modeButton.Text = "MODE: MOBILE"
         pickButton.Text = "AMBIL POSISI TOUCH"
-        positionLabel.Text = "Touch X: - | Y: -"
+        positionLabel.Text = "TEKAN F OTOMATIS"
     else
         modeButton.Text = "MODE: PC"
         pickButton.Text = "AMBIL POSISI (P)"
-        positionLabel.Text = "Mouse X: 0 | Y: 0"
+        positionLabel.Text = "TEKAN F OTOMATIS"
     end
 end
 
@@ -564,6 +666,9 @@ local function stopScript()
     if _G.StopAutoMiner then
         pcall(_G.StopAutoMiner) -- matikan miner juga
     end
+    if _G.StopAutoBuy then
+        pcall(_G.StopAutoBuy) -- matikan auto buy juga
+    end
     for _, connection in ipairs(connections) do
         connection:Disconnect()
     end
@@ -594,7 +699,6 @@ table.insert(connections, UserInputService.InputChanged:Connect(function(input)
     end
     local position = UserInputService:GetMouseLocation()
     lastX, lastY = math.floor(position.X), math.floor(position.Y)
-    positionLabel.Text = string.format("Mouse X: %d | Y: %d", lastX, lastY)
 end))
 
 -- Posisi sentuhan (Mobile)
@@ -605,7 +709,6 @@ local function updateTouch(touch)
     local inset = GuiService:GetGuiInset()
     lastX = math.floor(touch.Position.X + inset.X)
     lastY = math.floor(touch.Position.Y + inset.Y)
-    positionLabel.Text = string.format("Touch X: %d | Y: %d", lastX, lastY)
 end
 
 table.insert(connections, UserInputService.TouchStarted:Connect(updateTouch))
@@ -629,6 +732,9 @@ table.insert(connections, clickerTab.Activated:Connect(function()
 end))
 table.insert(connections, teleportTab.Activated:Connect(function()
     showTab("teleport")
+end))
+table.insert(connections, buyTab.Activated:Connect(function()
+    showTab("buy")
 end))
 table.insert(connections, toggleButton.Activated:Connect(toggleClicker))
 table.insert(connections, pickButton.Activated:Connect(usePosition))
@@ -660,13 +766,198 @@ end))
 
 -- ==========================================================
 -- ==========================================================
+-- WINDOW AUTO BUY (dijalankan di halaman AUTO BUY)
+-- ==========================================================
+-- ==========================================================
+do
+    local DEFAULT_NPC = "Hogan"
+    local DEFAULT_ITEM = "Livestock_Chicken"
+    local DEFAULT_QUANTITY = 1      -- jumlah per sekali beli
+    local DEFAULT_TIMES = 0         -- berapa kali beli (0 = terus sampai STOP)
+    local DEFAULT_DELAY = 30        -- jeda antar beli (detik)
+    local MIN_DELAY = 0.5           -- jeda paling cepat, supaya tidak spam server
+
+    local isBuyActive = false
+    local boughtCount = 0
+
+    local function getShopRemote()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local shop = remotes and remotes:FindFirstChild("Shop")
+        return shop and shop:FindFirstChild("RequestShopBuy")
+    end
+
+    local function createBuyLabel(yPos, height, text, bold)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0, 160, 0, height)
+        label.Position = UDim2.new(0, 20, 0, yPos)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = bold and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(190, 190, 190)
+        label.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+        label.TextSize = bold and 13 or 12
+        label.TextWrapped = true
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = text
+        label.Parent = buyPage
+        return label
+    end
+
+    local function createBuyField(yPos, labelText, defaultText, boxWidth)
+        boxWidth = boxWidth or 55
+        local label = createBuyLabel(yPos + 2, 20, labelText, false)
+        label.Size = UDim2.new(0, 160 - boxWidth - 6, 0, 20)
+
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0, boxWidth, 0, 24)
+        box.Position = UDim2.new(0, 180 - boxWidth, 0, yPos)
+        box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        box.BorderSizePixel = 0
+        box.Text = tostring(defaultText)
+        box.ClearTextOnFocus = false
+        box.TextColor3 = Color3.fromRGB(255, 255, 255)
+        box.Font = Enum.Font.SourceSans
+        box.TextSize = 12
+        box.TextTruncate = Enum.TextTruncate.AtEnd
+        box.Parent = buyPage
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
+        return box
+    end
+
+    local inputNpc = createBuyField(6, "NPC", DEFAULT_NPC, 90)
+    local inputItem = createBuyField(34, "Item", DEFAULT_ITEM, 90)
+    local inputQuantity = createBuyField(62, "Jumlah per beli", DEFAULT_QUANTITY)
+    local inputTimes = createBuyField(90, "Berapa kali (0=terus)", DEFAULT_TIMES)
+    local inputDelay = createBuyField(118, "Jeda (dtk)", DEFAULT_DELAY)
+
+    local buyToggleButton = Instance.new("TextButton")
+    buyToggleButton.Size = UDim2.new(0, 160, 0, 28)
+    buyToggleButton.Position = UDim2.new(0, 20, 0, 150)
+    buyToggleButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+    buyToggleButton.BorderSizePixel = 0
+    buyToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    buyToggleButton.Font = Enum.Font.SourceSansBold
+    buyToggleButton.TextSize = 13
+    buyToggleButton.Text = "START"
+    buyToggleButton.Parent = buyPage
+    Instance.new("UICorner", buyToggleButton).CornerRadius = UDim.new(0, 5)
+
+    local buyStatusLabel = createBuyLabel(184, 45, "Siap | 9 / 0 = start/stop", false)
+    buyStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+
+    local buySettings = {}
+
+    local function loadBuySettings()
+        local npc = inputNpc.Text:match("^%s*(.-)%s*$")
+        local item = inputItem.Text:match("^%s*(.-)%s*$")
+        local quantity = tonumber(inputQuantity.Text)
+        local times = tonumber(inputTimes.Text)
+        local delay = tonumber(inputDelay.Text)
+        if npc == "" or item == "" or not quantity or quantity < 1 or not times or times < 0 or not delay then
+            return false
+        end
+        buySettings.npc = npc
+        buySettings.item = item
+        buySettings.quantity = math.floor(quantity)
+        buySettings.times = math.floor(times)
+        buySettings.delay = math.max(delay, MIN_DELAY)
+        inputDelay.Text = tostring(buySettings.delay)
+        return true
+    end
+
+    local function stopBuy(reason)
+        isBuyActive = false
+        buyToggleButton.Text = "START"
+        buyToggleButton.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+        buyStatusLabel.Text = reason or string.format("Berhenti | terkirim %d", boughtCount)
+    end
+
+    local function buyOnce()
+        local remote = getShopRemote()
+        if not remote then
+            return false, "Remote Shop.RequestShopBuy tidak ditemukan"
+        end
+        local ok, err = pcall(function()
+            remote:FireServer({
+                npcId = buySettings.npc,
+                quantity = buySettings.quantity,
+                itemId = buySettings.item,
+            })
+        end)
+        return ok, err
+    end
+
+    local function runBuy()
+        local round = 0
+        while isBuyActive and isAlive do
+            round += 1
+            local ok, err = buyOnce()
+            if not ok then
+                stopBuy("Gagal: " .. tostring(err))
+                return
+            end
+            boughtCount += 1
+
+            local target = buySettings.times > 0 and tostring(buySettings.times) or "terus"
+            buyStatusLabel.Text = string.format("Beli %s x%d | %d/%s | total %d",
+                buySettings.item, buySettings.quantity, round, target, boughtCount)
+
+            if buySettings.times > 0 and round >= buySettings.times then
+                stopBuy(string.format("Selesai: %d kali beli %s", round, buySettings.item))
+                return
+            end
+
+            local elapsed = 0
+            while elapsed < buySettings.delay do
+                if not isBuyActive or not isAlive then return end
+                elapsed += task.wait()
+            end
+        end
+    end
+
+    local function startBuy()
+        if not loadBuySettings() then
+            buyStatusLabel.Text = "Input tidak valid"
+            return
+        end
+        isBuyActive = true
+        buyToggleButton.Text = "STOP"
+        buyToggleButton.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+        task.spawn(runBuy)
+    end
+
+    local lastBuyToggle = 0
+    local function toggleBuy()
+        if os.clock() - lastBuyToggle < 0.5 then return end
+        lastBuyToggle = os.clock()
+        if isBuyActive then
+            stopBuy()
+        else
+            startBuy()
+        end
+    end
+
+    _G.StopAutoBuy = function()
+        stopBuy("Script dimatikan")
+    end
+    _G.ToggleAutoBuy = toggleBuy
+
+    table.insert(connections, buyToggleButton.Activated:Connect(toggleBuy))
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then return end
+        if (input.KeyCode == Enum.KeyCode.Zero and currentTab == "buy") or input.KeyCode == Enum.KeyCode.Nine then
+            toggleBuy()
+        end
+    end))
+end
+
+-- ==========================================================
+-- ==========================================================
 -- TAB MINER (auto miner, dijalankan di halaman MINER)
 
 -- ==========================================================
 -- ==========================================================
 do
 -- Auto Miner
-    -- Alur: scan semua Ore_* > teleport > klik > deteksi remote > tunggu ore hilang > tunggu drop hilang > ulang
+    -- Alur: scan semua Ore_* > teleport > klik > tunggu ore hilang > tunggu drop hilang > ulang > teleport ke ore terdekat > klik di X,Y > tunggu > scan lagi > ulang
     -- Tombol UI atau 0 = start/stop | P = ambil posisi mouse | X = mark + skip SP ini | End = matikan script
 
     local Players = game:GetService("Players")
@@ -718,6 +1009,50 @@ do
     -- Cukup sebagian nama (tidak peduli huruf besar/kecil), contoh "GoldVeinedQuartz"
     local PRIORITY_DROP_PARTS = { "GoldVeinedQuartz" }
     local PRIORITY_WAIT_MAX = 30 -- batas tunggu di satu drop prioritas (detik), supaya tidak macet
+
+    -- ==========================================================
+    -- PASTIKAN PICKAXE DIPEGANG SEBELUM TEKAN F
+    -- Q itu toggle (pasang/lepas), jadi Q HANYA ditekan kalau di karakter
+    -- tidak ada Tool sama sekali. Kalau sudah pegang, Q tidak ditekan.
+    -- (disimpan dalam satu tabel supaya tidak menambah jumlah variabel local)
+    -- ==========================================================
+    local PICKAXE = {
+        enabled = true,
+        equipWait = 1,      -- tunggu setelah tekan Q (animasi ambil pickaxe)
+        supported = nil,    -- nil = belum tahu, false = pickaxe di game ini bukan Tool -> berhenti tekan Q
+    }
+
+    function PICKAXE.isHolding()
+        local character = player.Character
+        return character ~= nil and character:FindFirstChildOfClass("Tool") ~= nil
+    end
+
+    -- true = siap menambang
+    function PICKAXE.ensure(waitFn, statusFn)
+        if not PICKAXE.enabled or PICKAXE.supported == false then
+            return true
+        end
+        if PICKAXE.isHolding() then
+            PICKAXE.supported = true
+            return true
+        end
+        statusFn("Pickaxe belum dipegang, tekan Q")
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+        if not waitFn(PICKAXE.equipWait) then
+            return false
+        end
+        if PICKAXE.isHolding() then
+            PICKAXE.supported = true
+        elseif PICKAXE.supported == nil then
+            -- Tekan Q tapi tetap tidak ada Tool: pickaxe di game ini bukan Tool.
+            -- Berhenti tekan Q supaya tidak bolak-balik pasang/lepas.
+            PICKAXE.supported = false
+            warn("[Miner] Pickaxe tidak terdeteksi sebagai Tool, cek pickaxe dimatikan")
+        end
+        return true
+    end
 
     -- Timeout khusus per jenis ore (detik). Jenis yang tidak ada di sini memakai kolom "Timeout ore hilang".
     local TYPE_TIMEOUTS = {
@@ -1027,6 +1362,25 @@ do
         return nil
     end
 
+    -- Titik Y PALING BAWAH ore (bukan tengah). X/Z tetap di tengah ore.
+    -- Dihitung dari ukuran + rotasi part, jadi tetap benar walau ore miring.
+    local ORE_Y_FROM_BOTTOM = true -- false = pakai Y tengah seperti dulu
+    local function getOreBottomY(ore)
+        local cframe, size
+        if ore:IsA("BasePart") then
+            cframe, size = ore.CFrame, ore.Size
+        elseif ore:IsA("Model") then
+            cframe, size = ore:GetBoundingBox()
+        else
+            return nil
+        end
+        -- Setengah tinggi di dunia = jumlah proyeksi tiap sumbu part ke arah Y
+        local halfHeight = (math.abs(cframe.RightVector.Y) * size.X
+            + math.abs(cframe.UpVector.Y) * size.Y
+            + math.abs(cframe.LookVector.Y) * size.Z) / 2
+        return cframe.Position.Y - halfHeight
+    end
+
     -- Hasil: daftar { name, ore, position }
     local function scanOres()
         local spawnFolder = workspace:FindFirstChild("Maps")
@@ -1045,11 +1399,18 @@ do
                     local ore = oreType:FindFirstChild("Ore")
                     local cframe = ore and getOreCFrame(ore)
                     if cframe then
+                        local position = cframe.Position
+                        if ORE_Y_FROM_BOTTOM then
+                            local bottomY = getOreBottomY(ore)
+                            if bottomY then
+                                position = Vector3.new(position.X, bottomY, position.Z)
+                            end
+                        end
                         table.insert(results, {
-                            name = spawnPoint.Name,               -- dipakai untuk Skip / MARK
-                            oreType = oreType.Name:sub(5),        -- contoh: "Stone", "Iron"
+                            name = spawnPoint.Name,              -- dipakai untuk Skip / MARK
+                            oreType = oreType.Name:sub(5),       -- contoh: "Stone", "Iron"
                             ore = ore,
-                            position = cframe.Position,
+                            position = position, -- Y = dasar ore (lihat ORE_Y_FROM_BOTTOM)
                         })
                     end
                 end
@@ -1732,6 +2093,7 @@ do
                 return
             end
 
+            if not PICKAXE.ensure(waitFor, setStatus) then return end
             for i = 1, settings.clicks do
                 if not target.ore.Parent then
                     break -- ore sudah hilang, berarti tertambang
@@ -1779,6 +2141,7 @@ do
         toggleButton.BackgroundColor3 = Color3.fromRGB(170, 110, 20)
 
         -- Batas waktu diambil dari kolom "Timeout ore hilang" (bisa diubah saat jalan)
+        local oreTimeout = TYPE_TIMEOUTS[target.oreType] or settings.waitTime
         local oreDeadline = os.clock() + oreTimeout
         while target.ore.Parent do
             local left = oreDeadline - os.clock()
@@ -3053,6 +3416,46 @@ do
             blFrame.Visible = not blFrame.Visible
         end
     end))
+end
+
+-- ==========================================================
+-- CEK STATUS DARI SERVER (enable/disable dari halaman admin)
+-- ==========================================================
+-- Hanya aktif kalau toolkit dijalankan lewat loader server (_G.ToolkitAuth diisi loader).
+-- Tiap 10 detik tanya server. Kalau balasannya "disabled", toolkit mati sendiri.
+do
+    local auth = _G.ToolkitAuth
+    if type(auth) == "table" and auth.base and auth.key then
+        local HttpServiceCheck = game:GetService("HttpService")
+        local pingUrl = string.format("%s/ping?uid=%s&key=%s",
+            auth.base, tostring(auth.uid), HttpServiceCheck:UrlEncode(auth.key))
+
+        task.spawn(function()
+            while isAlive do
+                task.wait(10)
+                if not isAlive then
+                    break
+                end
+                local ok, result = pcall(function()
+                    return game:HttpGet(pingUrl)
+                end)
+                -- Server mati / internet putus = abaikan (toolkit tetap jalan).
+                -- Hanya mati kalau server jelas menjawab "disabled".
+                if ok and type(result) == "string" and result:find("disabled", 1, true) then
+                    pcall(function()
+                        game:GetService("StarterGui"):SetCore("SendNotification", {
+                            Title = "Toolkit",
+                            Text = "Script dinonaktifkan oleh admin",
+                            Duration = 8,
+                        })
+                    end)
+                    warn("[Toolkit] Dinonaktifkan oleh admin")
+                    stopScript()
+                    break
+                end
+            end
+        end)
+    end
 end
 
 -- ==========================================================
