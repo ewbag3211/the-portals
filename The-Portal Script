@@ -14,6 +14,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local GuiService = game:GetService("GuiService")
+local RunService = game:GetService("RunService")
 
 local HOLD_TIME = 0.05   -- lama klik ditahan (50 ms)
 local CLICK_GAP = 0.1    -- jeda antar klik dalam satu putaran (100 ms)
@@ -359,8 +360,59 @@ local function setStatus(text, color)
     toggleButton.BackgroundColor3 = color
 end
 
+-- ==========================================================
+-- LOCK KAMERA & KARAKTER SAAT AUTO CLICKER BERJALAN
+-- Tidak merespons geser mouse atau sentuhan touch (hanya tombol F)
+-- ==========================================================
+local CLICKER_CAMERA_BIND = "ToolkitClickerCameraLock"
+local clickerCameraCFrame = nil
+
+local function lockClickerCamera()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    clickerCameraCFrame = camera.CFrame
+    camera.CameraType = Enum.CameraType.Scriptable
+
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = true
+    end
+
+    pcall(function()
+        RunService:UnbindFromRenderStep(CLICKER_CAMERA_BIND)
+    end)
+    RunService:BindToRenderStep(CLICKER_CAMERA_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+        if not isActive or not isAlive then
+            pcall(function()
+                RunService:UnbindFromRenderStep(CLICKER_CAMERA_BIND)
+            end)
+            return
+        end
+        camera.CameraType = Enum.CameraType.Scriptable
+        if clickerCameraCFrame then
+            camera.CFrame = clickerCameraCFrame
+        end
+    end)
+end
+
+local function unlockClickerCamera()
+    pcall(function()
+        RunService:UnbindFromRenderStep(CLICKER_CAMERA_BIND)
+    end)
+    local camera = workspace.CurrentCamera
+    if camera then
+        camera.CameraType = Enum.CameraType.Custom
+    end
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = false
+    end
+end
+
 local function stopClicker()
     isActive = false
+    _G.IsClickerRunning = false
+    unlockClickerCamera()
     setStatus("START", Color3.fromRGB(20, 120, 60))
 end
 
@@ -388,6 +440,11 @@ end
 local function startClicker()
     if loadSettings() then
         isActive = true
+        _G.IsClickerRunning = true
+        if _G.ClearPlayerMarks then
+            pcall(_G.ClearPlayerMarks)
+        end
+        lockClickerCamera()
         setStatus("STOP", Color3.fromRGB(120, 30, 30))
     else
         setStatus("INPUT TIDAK VALID", Color3.fromRGB(170, 110, 20))
@@ -663,6 +720,8 @@ end)
 local function stopScript()
     isActive = false
     isAlive = false
+    _G.IsClickerRunning = false
+    pcall(unlockClickerCamera)
     if _G.StopAutoMiner then
         pcall(_G.StopAutoMiner) -- matikan miner juga
     end
@@ -673,6 +732,8 @@ local function stopScript()
         connection:Disconnect()
     end
     gui:Destroy()
+    _G.IsClickerRunning = nil
+    _G.ClearPlayerMarks = nil
     _G.StopSimpleClicker = nil
 end
 
@@ -2275,6 +2336,13 @@ do
         end
     end
 
+    local function clearAllPlayerMarks()
+        for other in pairs(playerMarks) do
+            removeMark(other)
+        end
+    end
+    _G.ClearPlayerMarks = clearAllPlayerMarks
+
     local function getMark(other, character)
         local mark = playerMarks[other]
         if mark and mark.character == character then
@@ -2312,6 +2380,12 @@ do
     end
 
     local function updatePlayerMarks()
+        -- Jika Auto Clicker sedang jalan, sembunyikan tanda pemain lain
+        if _G.IsClickerRunning then
+            clearAllPlayerMarks()
+            return
+        end
+
         local myCharacter = player.Character
         local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
 
@@ -2321,7 +2395,7 @@ do
                 local root = character and character:FindFirstChild("HumanoidRootPart")
                 local distance = (myRoot and root) and (root.Position - myRoot.Position).Magnitude or math.huge
 
-                if SHOW_PLAYERS and root and distance <= PLAYER_RADIUS then
+                if SHOW_PLAYERS and not _G.IsClickerRunning and root and distance <= PLAYER_RADIUS then
                     local mark = getMark(other, character)
                     mark.label.Text = string.format("%s\n%.0f stud", other.Name, distance)
                 else
